@@ -1,15 +1,15 @@
 // Package backend: Annotated ASTをCバックエンドへ渡すためのシリアライザ。
 //
-// GoはAnnotated ASTを独自テキスト形式（.bir: Backend IR）にシリアライズし、
-// Cバックエンド（backend）がそのファイルを読んでBackendFunctionを構築する。
+// GoはAnnotated ASTを独自テキスト形式（.cai）にシリアライズし、
+// Cバックエンドがそれを読んでC側BackendFunctionを構築する。
 //
-// BIR形式の設計方針:
+// CAI形式の設計方針:
 //   - 1行1要素。ネストはインデントで表現しない（キーワードで区切る）
 //   - Cのパーサが sscanf/strcmp だけで読める単純な構造にする
 //   - Analyzerが付与したAnnotation情報をそのまま出力する（再計算しない）
 //   - 型推論・名前解決は行わない（Analyzerが保証済みの情報のみ使う）
 //
-// BIR形式の概要:
+// CAI形式の概要:
 //
 //	FUNC <name> <is_public:0|1> <return_size> <return_is_ptr:0|1>
 //	PARAM <name> <size> <is_ptr:0|1>
@@ -54,7 +54,7 @@ import (
 // Analyzerが付与したAnnotationをそのまま使用する。型推論・名前解決は行わない。
 func Serialize(prog *ast.Program) string {
 	var sb strings.Builder
-	sb.WriteString("BIR 1\n") // バージョンヘッダ
+	sb.WriteString("CAI 1\n") // バージョンヘッダ
 	for _, stmt := range prog.Statements {
 		fn, ok := stmt.(*ast.FuncNode)
 		if !ok {

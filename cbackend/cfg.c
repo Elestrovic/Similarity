@@ -163,18 +163,12 @@ static CFGBlock *build_stmt(CFG *cfg, LoopStack *ls,
         cond_blk->cond     = bif->cond;
         add_edge(current, cond_blk);
 
-        /* Mergeブロック（先に作成してTrue/Falseから接続） */
-        CFGBlock *merge_blk = new_block(cfg, BLOCK_MERGE, depth);
-
         /* Trueブロック */
         CFGBlock *true_blk = new_block(cfg, BLOCK_IF_TRUE, depth);
         add_edge(cond_blk, true_blk);
         CFGBlock *true_end = build_stmts(cfg, ls,
                                           bif->true_stmts, bif->true_count,
                                           true_blk, depth);
-        if (true_end != NULL) {
-            add_edge(true_end, merge_blk);
-        }
 
         /* Falseブロック */
         CFGBlock *false_blk = new_block(cfg, BLOCK_IF_FALSE, depth);
@@ -182,6 +176,26 @@ static CFGBlock *build_stmt(CFG *cfg, LoopStack *ls,
         CFGBlock *false_end = build_stmts(cfg, ls,
                                            bif->false_stmts, bif->false_count,
                                            false_blk, depth);
+
+        /*
+         * Mergeブロック生成の判定:
+         * true_end == NULL かつ false_end == NULL の場合、
+         * 両分岐がRETなど終端命令で終了しており、
+         * IF後に到達可能なコードが存在しない。
+         * → merge blockは不要（生成しない）。
+         *
+         * 片方または両方がフォールスルーする場合はmerge blockを生成する。
+         */
+        if (true_end == NULL && false_end == NULL) {
+            /* 両分岐が終端 → mergeブロック不要 */
+            return NULL;
+        }
+
+        /* merge blockを生成してフォールスルーするパスを接続 */
+        CFGBlock *merge_blk = new_block(cfg, BLOCK_MERGE, depth);
+        if (true_end != NULL) {
+            add_edge(true_end, merge_blk);
+        }
         if (false_end != NULL) {
             add_edge(false_end, merge_blk);
         }

@@ -1,4 +1,5 @@
 // Package backend: Cバックエンドの起動・管理。
+// CAIファイル（Go BackendFunctionのシリアライズ形式）を経由してC側BackendFunctionに渡す。
 package backend
 
 import (
@@ -81,11 +82,14 @@ func findBackend() string {
 	return "./cbackend/sim_backend"
 }
 
-// BIRPath は入力ファイルパスに対応するBIRファイルパスを返す。
-func BIRPath(inputFile string) string {
+// CAIPath は入力ファイルパスに対応するCAIファイルパスを返す。
+func CAIPath(inputFile string) string {
 	base := strings.TrimSuffix(inputFile, filepath.Ext(inputFile))
-	return base + ".bir"
+	return base + ".cai"
 }
+
+// BIRPath は後方互換のためCAIPathへの別名（非推奨）。
+func BIRPath(inputFile string) string { return CAIPath(inputFile) }
 
 // OutPath は入力ファイルパスに対応する出力バイナリパスを返す。
 func OutPath(inputFile string) string {

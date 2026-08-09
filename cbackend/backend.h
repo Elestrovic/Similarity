@@ -1,15 +1,14 @@
 /*
  * backend.h — Cバックエンド内部データ構造
  *
- * BackendFunctionはAnnotated ASTをCバックエンドが扱える形に変換した
- * 最初の内部表現。
+ * C側BackendFunction: Go BackendFunctionのCAIシリアライズから復元される内部表現。
  *
  * 設計原則:
  *   - 型推論しない
  *   - 名前解決しない
  *   - スコープ探索しない
  *   - Analyzerが付与した情報（size / is_ptr / loop_depth）をそのまま使う
- *   - BackendはBIRファイルを読んでBackendFunctionを構築するだけ
+ *   - BackendはCAIファイルを読んでBackendFunctionを構築するだけ
  */
 
 #pragma once
@@ -200,6 +199,8 @@ typedef struct {
 } BackendProgram;
 
 /* ===== 関数宣言 ===== */
-BackendProgram *bir_parse(const char *path);
-void            bir_free(BackendProgram *prog);
-void            bir_dump(const BackendProgram *prog);  /* デバッグ出力 */
+BackendProgram *cai_parse(const char *path);  /* CAIファイルを読んでBackendProgramを構築 */
+void            cai_free(BackendProgram *prog);
+void            cai_dump(const BackendProgram *prog);  /* デバッグ出力 */
+
+

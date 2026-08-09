@@ -46,7 +46,7 @@ static BackendProgram *parse_bir_str(const char *bir, const char *tmpfile) {
     if (!f) { fprintf(stderr, "cannot open %s\n", tmpfile); return NULL; }
     fputs(bir, f);
     fclose(f);
-    return bir_parse(tmpfile);
+    return cai_parse(tmpfile);
 }
 
 /* ===== CFGヘルパー ===== */
@@ -109,7 +109,7 @@ static bool has_pred(const CFGBlock *blk, const CFGBlock *pred) {
  *   ENDFUNC
  */
 static const char *BIR_FIB =
-    "BIR 1\n"
+    "CAI 1\n"
     "FUNC fibonacci 0 4 0\n"
     "PARAM n 4 0\n"
     "LOCAL a 4 0\n"
@@ -186,13 +186,13 @@ static void test_fibonacci(void) {
 
     cfg_dump(cfg);
     cfg_free(cfg);
-    bir_free(prog);
+    cai_free(prog);
     printf("\n");
 }
 
 /* ===== テスト: sum (1重ループ) ===== */
 static const char *BIR_SUM =
-    "BIR 1\n"
+    "CAI 1\n"
     "FUNC main 1 4 0\n"
     "LOCAL i 4 0\n"
     "LOCAL sum 4 0\n"
@@ -261,13 +261,13 @@ static void test_sum(void) {
 
     cfg_dump(cfg);
     cfg_free(cfg);
-    bir_free(prog);
+    cai_free(prog);
     printf("\n");
 }
 
 /* ===== テスト: nested_loop (2重ループ) ===== */
 static const char *BIR_NESTED =
-    "BIR 1\n"
+    "CAI 1\n"
     "FUNC main 1 4 0\n"
     "LOCAL i 4 0\n"
     "LOCAL j 4 0\n"
@@ -328,13 +328,13 @@ static void test_nested_loop(void) {
 
     cfg_dump(cfg);
     cfg_free(cfg);
-    bir_free(prog);
+    cai_free(prog);
     printf("\n");
 }
 
 /* ===== テスト: matrix (3重ループ) ===== */
 static const char *BIR_MATRIX =
-    "BIR 1\n"
+    "CAI 1\n"
     "FUNC main 1 4 0\n"
     "LOCAL N 4 0\n"
     "LOCAL sum 4 0\n"
@@ -405,7 +405,7 @@ static void test_matrix(void) {
 
     cfg_dump(cfg);
     cfg_free(cfg);
-    bir_free(prog);
+    cai_free(prog);
     printf("\n");
 }
 
@@ -428,7 +428,7 @@ static void test_edge_symmetry(void) {
     }
 
     cfg_free(cfg);
-    bir_free(prog);
+    cai_free(prog);
     printf("\n");
 }
 
@@ -437,7 +437,7 @@ static void test_entry_always_exists(void) {
     printf("--- test_entry_always_exists ---\n");
     /* 最小のBIR: 変数1つとReturn */
     const char *bir =
-        "BIR 1\n"
+        "CAI 1\n"
         "FUNC f 0 4 0\n"
         "LOCAL x 4 0\n"
         "BODY\n"
@@ -455,7 +455,7 @@ static void test_entry_always_exists(void) {
     CHECK_EQ(cfg->entry->id, 0, "entry.id == 0");
 
     cfg_free(cfg);
-    bir_free(prog);
+    cai_free(prog);
     printf("\n");
 }
 
@@ -464,7 +464,7 @@ static void test_if_in_loop(void) {
     printf("--- test_if_in_loop ---\n");
     /* ループ内にIfがある */
     const char *bir =
-        "BIR 1\n"
+        "CAI 1\n"
         "FUNC f 0 4 0\n"
         "LOCAL i 4 0\n"
         "LOCAL x 4 0\n"
@@ -507,7 +507,7 @@ static void test_if_in_loop(void) {
     CHECK_EQ(back_edges, 1, "1 back edge");
 
     cfg_free(cfg);
-    bir_free(prog);
+    cai_free(prog);
     printf("\n");
 }
 

@@ -89,12 +89,12 @@ func runCAI(src string, opts compiler.Options) {
 	}
 
 	// BIRシリアライズ + Cバックエンド呼び出し（--dump-cfg 等のフラグを渡す）
-	birFile := backend.BIRPath(ctx.InputFile)
+	caiFile := backend.CAIPath(ctx.InputFile)
 	outFile := backend.OutPath(ctx.InputFile)
 	runOpts := backend.RunOptions{
 		DumpCFG: opts.DumpCFG,
 	}
-	if err := backend.Run(result.Program, birFile, outFile, runOpts); err != nil {
+	if err := backend.Run(result.Program, caiFile, outFile, runOpts); err != nil {
 		fmt.Fprintf(os.Stderr, "Cバックエンド失敗: %v\n", err)
 	}
 

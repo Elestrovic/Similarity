@@ -52,7 +52,7 @@ Function_public[main{
 }]`)
 	t.Log(bir)
 	mustContain(t, bir, []string{
-		"BIR 1",
+		"CAI 1",
 		"FUNC main 1 4 0",
 		"LOCAL i 4 0",
 		"LOCAL sum 4 0",
@@ -134,7 +134,7 @@ func TestSerialize_Header(t *testing.T) {
 Explanation[Application{Benchmark(type:sum)}]
 Function_public[main{receive{},Variable[let{int(x:1)}],return(x)}]`)
 	lines := strings.Split(bir, "\n")
-	if lines[0] != "BIR 1" {
-		t.Errorf("first line = %q, want 'BIR 1'", lines[0])
+	if lines[0] != "CAI 1" {
+		t.Errorf("first line = %q, want 'CAI 1'", lines[0])
 	}
 }

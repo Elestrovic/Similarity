@@ -1,11 +1,11 @@
 /*
  * main.c — sim_backend エントリーポイント
  *
- * Stage 3: BIRファイルを読んでBackendFunctionを構築し、CFGを生成する。
+ * Stage 3: CAIファイルを読んでBackendFunctionを構築し、CFGを生成する。
  *          機械語生成・ELF出力はStage 4以降で実装する。
  *
  * 使い方:
- *   sim_backend <input.bir> <output.elf> [options]
+ *   sim_backend <input.cai> <output.elf> [options]
  *
  * options:
  *   --dump          BackendFunctionの内容を表示
@@ -20,11 +20,11 @@
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: sim_backend <input.bir> <output.elf> [--dump] [--dump-cfg]\n");
+        fprintf(stderr, "Usage: sim_backend <input.cai> <output.elf> [--dump] [--dump-cfg]\n");
         return 1;
     }
 
-    const char *bir_path = argv[1];
+    const char *cai_path = argv[1];
     const char *out_path = argv[2];
 
     bool do_dump     = false;
@@ -34,19 +34,19 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "--dump-cfg") == 0) do_dump_cfg = true;
     }
 
-    /* BIRファイルを読んでBackendProgramを構築 */
-    BackendProgram *prog = bir_parse(bir_path);
+    /* CAIファイルを読んでBackendProgramを構築 */
+    BackendProgram *prog = cai_parse(cai_path);
     if (!prog) {
-        fprintf(stderr, "BIRパース失敗: %s\n", bir_path);
+        fprintf(stderr, "CAIパース失敗: %s\n", cai_path);
         return 1;
     }
 
     fprintf(stderr, "BackendProgram: %d functions loaded from %s\n",
-            prog->func_count, bir_path);
+            prog->func_count, cai_path);
 
     /* --dump: BackendFunctionの内容を表示 */
     if (do_dump) {
-        bir_dump(prog);
+        cai_dump(prog);
     }
 
     /* CFGを構築 */
@@ -66,7 +66,7 @@ int main(int argc, char *argv[]) {
     if (!out) {
         fprintf(stderr, "出力ファイルを開けません: %s\n", out_path);
         cfg_program_free(cfgprog);
-        bir_free(prog);
+        cai_free(prog);
         return 1;
     }
     fclose(out);
@@ -75,6 +75,6 @@ int main(int argc, char *argv[]) {
             cfgprog->ncfgs);
 
     cfg_program_free(cfgprog);
-    bir_free(prog);
+    cai_free(prog);
     return 0;
 }

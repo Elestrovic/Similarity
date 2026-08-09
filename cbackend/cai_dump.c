@@ -1,5 +1,5 @@
 /*
- * bir_dump.c — BackendProgramの内容をデバッグ出力する。
+ * cai_dump.c — BackendProgramの内容をデバッグ出力する。
  * --dump-cfg オプションで使用（Stage 3以降はCFG情報を出力する）。
  */
 
@@ -149,7 +149,7 @@ static void dump_stmts(const BStmt *stmts, int n, int depth) {
     }
 }
 
-void bir_dump(const BackendProgram *prog) {
+void cai_dump(const BackendProgram *prog) {
     if (!prog) return;
     printf("===== BackendProgram (%d functions) =====\n\n", prog->func_count);
     for (int i = 0; i < prog->func_count; i++) {

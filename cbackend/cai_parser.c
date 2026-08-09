@@ -1,11 +1,11 @@
 /*
- * bir_parser.c — BIR形式テキストを読んでBackendProgramを構築する。
+ * cai_parser.c — CAI形式テキストを読んでBackendProgramを構築する。
  *
  * 設計原則:
  *   - 型推論しない
  *   - 名前解決しない
  *   - Analyzerが付与した情報（size / is_ptr / loop_depth）をそのまま読む
- *   - BIR形式は1行1トークン列。sscanf/fgetsで処理できる単純な構造。
+ *   - CAI形式は1行1トークン列。sscanf/fgetsで処理できる単純な構造。
  */
 
 #include <stdio.h>
@@ -70,7 +70,7 @@ static char *next_tok(Parser *p __attribute__((unused))) {
 }
 
 /* ===== 式のパース ===== */
-/* BIR形式の式はインライン（同一行上にトークン列で記述される） */
+/* CAI形式の式はインライン（同一行上にトークン列で記述される） */
 /* strtokで次々とトークンを消費して式ツリーを構築する */
 
 static BExpr *parse_expr(Parser *p);
@@ -322,20 +322,20 @@ static int parse_stmts(Parser *p, BStmt *buf, int max_count,
     return n;
 }
 
-/* ===== BIRファイル全体のパース ===== */
-BackendProgram *bir_parse(const char *path) {
+/* ===== CAIファイル全体のパース ===== */
+BackendProgram *cai_parse(const char *path) {
     FILE *fp = fopen(path, "r");
     if (!fp) {
-        fprintf(stderr, "BIRファイルを開けません: %s\n", path);
+        fprintf(stderr, "CAIファイルを開けません: %s\n", path);
         return NULL;
     }
 
     Parser p = {0};
     p.fp = fp;
 
-    /* ヘッダ確認: "BIR 1" */
-    if (!next_line(&p) || strcmp(p.tok, "BIR") != 0) {
-        fprintf(stderr, "BIRヘッダが不正です\n");
+    /* ヘッダ確認: "CAI 1" */
+    if (!next_line(&p) || strcmp(p.tok, "CAI") != 0) {
+        fprintf(stderr, "CAIヘッダが不正です\n");
         fclose(fp);
         return NULL;
     }
@@ -451,7 +451,7 @@ static void free_stmts(BStmt *stmts, int n) {
     }
 }
 
-void bir_free(BackendProgram *prog) {
+void cai_free(BackendProgram *prog) {
     if (!prog) return;
     for (int i = 0; i < prog->func_count; i++) {
         BackendFunction *fn = &prog->funcs[i];
