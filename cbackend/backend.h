@@ -1,14 +1,13 @@
 /*
- * backend.h — Cバックエンド内部データ構造
+ * backend.h — C側 BackendFunction
  *
- * C側BackendFunction: Go BackendFunctionのCAIシリアライズから復元される内部表現。
+ * Go BackendFunction を .cai バイナリ経由で受け取り復元したもの。
+ * CFGはここから構築する。
  *
  * 設計原則:
- *   - 型推論しない
- *   - 名前解決しない
- *   - スコープ探索しない
- *   - Analyzerが付与した情報（size / is_ptr / loop_depth）をそのまま使う
- *   - BackendはCAIファイルを読んでBackendFunctionを構築するだけ
+ *   - 型推論しない / 名前解決しない / スコープ探索しない
+ *   - Analyzerが付与した情報（size/is_ptr/loop_depth）をそのまま使う
+ *   - cai_deserialize() が .cai バイナリを読んで BackendProgram を構築する
  */
 
 #pragma once
@@ -16,116 +15,108 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* ===== 文字列の最大長 ===== */
-#define MAX_NAME     128
-#define MAX_STMTS   4096
-#define MAX_PARAMS    32
-#define MAX_LOCALS   512
-#define MAX_ARGS      16
+#define MAX_NAME    128
+#define MAX_STR     512
+#define MAX_STMTS  4096
+#define MAX_PARAMS   32
+#define MAX_LOCALS  512
+#define MAX_ARGS     16
 
-/* ===== 変数情報（Analyzerが確定済み） ===== */
+/* ===== 変数情報 ===== */
 typedef struct {
     char name[MAX_NAME];
-    int  size;      /* バイト数: int=4, String=8, ptr=8, int64=8 */
-    bool is_ptr;    /* 64bit幅で扱う（String/ptr/int64） */
+    int  size;
+    bool is_ptr;
 } BVariable;
 
-/* ===== 式ノードの種別 ===== */
+/* ===== 式の種別（Go BFExprKind と1対1） ===== */
 typedef enum {
-    EXPR_LIT_INT   = 1,
-    EXPR_LIT_FLOAT = 2,
-    EXPR_LIT_STR   = 3,
-    EXPR_IDENT     = 4,  /* 変数参照 */
-    EXPR_BINOP     = 5,  /* 二項演算 */
-    EXPR_CALL      = 6,  /* 関数呼び出し */
-    EXPR_CAST      = 7,
-    EXPR_ARRLOAD   = 8,  /* 配列要素読み込み */
-    EXPR_ADDR      = 9,  /* アドレス取得 */
-    EXPR_DEREF     = 10, /* ポインタ参照外し */
+    EXPR_LIT_INT   = 0,
+    EXPR_LIT_FLOAT = 1,
+    EXPR_LIT_STR   = 2,
+    EXPR_IDENT     = 3,
+    EXPR_BINOP     = 4,
+    EXPR_CALL      = 5,
+    EXPR_CAST      = 6,
+    EXPR_ARRLOAD   = 7,
+    EXPR_ADDR      = 8,
+    EXPR_DEREF     = 9,
 } ExprKind;
 
-/* ===== 式ノード（BIRから再構築） ===== */
+/* ===== 式ノード ===== */
 typedef struct BExpr BExpr;
 struct BExpr {
     ExprKind kind;
-    int      result_size;    /* Analyzerが付与した結果サイズ */
-    bool     result_is_ptr;  /* Analyzerが付与したポインタ属性 */
+    int32_t  result_size;   /* 全kind共通: Analyzerが付与した結果サイズ */
+    bool     result_is_ptr; /* 全kind共通: Analyzerが付与したポインタ属性 */
 
     /* EXPR_LIT_INT */
     int64_t  int_val;
 
     /* EXPR_LIT_FLOAT */
-    double   float_val;
+    float    float_val;
 
     /* EXPR_LIT_STR */
-    char     str_val[256];
+    char     str_val[MAX_STR];
 
     /* EXPR_IDENT */
     char     ident_name[MAX_NAME];
-    int      ident_size;
-    bool     ident_is_ptr;
 
     /* EXPR_BINOP */
-    char     op[4];      /* + - * / */
+    char     binop[8];
     BExpr   *lhs;
     BExpr   *rhs;
 
     /* EXPR_CALL */
     char     func_name[MAX_NAME];
-    int      call_return_size;
-    bool     call_return_is_ptr;
     int      argc;
     BExpr   *args[MAX_ARGS];
 
-    /* EXPR_CAST / EXPR_DEREF */
+    /* EXPR_CAST: inner */
     BExpr   *inner;
 
     /* EXPR_ARRLOAD */
     char     arr_name[MAX_NAME];
-    int      elem_size;
-    bool     elem_is_ptr;
-    BExpr   *index;
+    BExpr   *arr_index;
 
-    /* EXPR_ADDR */
-    char     addr_name[MAX_NAME];
+    /* EXPR_ADDR / EXPR_DEREF */
+    char     ref_name[MAX_NAME];
 };
 
-/* ===== 文ノードの種別 ===== */
-typedef enum {
-    STMT_STORE    = 1,  /* 変数への代入（Variable宣言/Mutation共通） */
-    STMT_INCR     = 2,  /* ++/-- */
-    STMT_LOOP     = 3,  /* Loopブロック */
-    STMT_IF       = 4,  /* Ifブロック */
-    STMT_RET      = 5,  /* return */
-    STMT_RET_VOID = 6,  /* return（void） */
-    STMT_ARRSTORE = 7,  /* 配列要素書き込み */
-    STMT_BREAK    = 8,
-    STMT_CONTINUE = 9,
-} StmtKind;
-
-/* ===== 条件ノード ===== */
+/* ===== 条件ノード（Go BFCond と1対1） ===== */
 typedef struct {
-    char op[16];         /* le / lt / eq / ge / gt / ne */
-    char left[MAX_NAME];
-    int  left_size;
-    bool left_is_ptr;
-    char right[MAX_NAME];
-    int  right_size;
-    bool right_is_ptr;
+    char   op[16];  /* le / lt / eq / ge / gt / ne */
+    BExpr *left;
+    BExpr *right;
 } BCond;
 
-/* ===== 文ノード（前方宣言） ===== */
+/* ===== 文の種別（Go BFStmtKind と1対1） ===== */
+typedef enum {
+    STMT_STORE     = 0,  /* Variable宣言 / Mutation（代入） */
+    STMT_MUTATION  = 1,  /* Mutation（Goでは0/1を区別、C側は同一処理でよい） */
+    STMT_INCR      = 2,  /* ++/-- */
+    STMT_LOOP      = 3,
+    STMT_IF        = 4,
+    STMT_RET       = 5,
+    STMT_RET_VOID  = 6,
+    STMT_CALL_STMT = 7,  /* 式文としてのCall（戻り値不使用） */
+    STMT_ARRSTORE  = 8,
+    STMT_BREAK     = 9,
+    STMT_CONTINUE  = 10,
+    STMT_RAWMEM    = 11, /* risk{}ブロック（内部のstmtをそのまま含む） */
+} StmtKind;
+
 typedef struct BStmt BStmt;
 
-/* ===== ループ本体 ===== */
+/* ===== ループ ===== */
 typedef struct {
-    int     depth;       /* LoopNode.LoopDepth（Analyzerが付与） */
+    int32_t depth;
     BCond   cond;
-    BStmt  *body;        /* LOOPBODY内の文リスト */
+    BStmt  *body;
     int     body_count;
 } BLoop;
 
-/* ===== Ifブロック ===== */
+/* ===== If ===== */
 typedef struct {
     BCond   cond;
     BStmt  *true_stmts;
@@ -138,7 +129,7 @@ typedef struct {
 struct BStmt {
     StmtKind kind;
 
-    /* STMT_STORE */
+    /* STMT_STORE / STMT_MUTATION */
     char   dst_name[MAX_NAME];
     int    dst_size;
     bool   dst_is_ptr;
@@ -148,18 +139,21 @@ struct BStmt {
     char   incr_name[MAX_NAME];
     int    incr_size;
     bool   incr_is_ptr;
-    bool   incr_is_dec;  /* true: --, false: ++ */
+    bool   incr_is_dec;
 
     /* STMT_LOOP */
-    BLoop loop;
+    BLoop  loop;
 
     /* STMT_IF */
-    BIf   bif;
+    BIf    bif;
 
     /* STMT_RET */
     int    ret_size;
     bool   ret_is_ptr;
     BExpr *ret_val;
+
+    /* STMT_CALL_STMT: 式文としてのCALL。呼び出し式はvalueに格納。 */
+    /* valueフィールドを共用（STMT_STOREと同じフィールド） */
 
     /* STMT_ARRSTORE */
     char   arr_name[MAX_NAME];
@@ -169,25 +163,16 @@ struct BStmt {
     BExpr *arr_val;
 };
 
-/* ===== BackendFunction ===== */
-/* Annotated ASTの1関数に対応するBackendの最初の内部表現 */
+/* ===== BackendFunction（Go BackendFunc と1対1） ===== */
 typedef struct {
     char      name[MAX_NAME];
     bool      is_public;
-
-    /* 引数（Analyzerが付与したParamsから生成） */
+    int32_t   return_size;
+    bool      return_is_ptr;
     BVariable params[MAX_PARAMS];
     int       param_count;
-
-    /* ローカル変数（FuncNode.LocalVarsから生成） */
     BVariable locals[MAX_LOCALS];
     int       local_count;
-
-    /* 戻り値情報（FuncNode.ReturnAnnから生成） */
-    int       return_size;
-    bool      return_is_ptr;
-
-    /* 関数Body（文リスト） */
     BStmt    *stmts;
     int       stmt_count;
 } BackendFunction;
@@ -199,8 +184,7 @@ typedef struct {
 } BackendProgram;
 
 /* ===== 関数宣言 ===== */
-BackendProgram *cai_parse(const char *path);  /* CAIファイルを読んでBackendProgramを構築 */
+/* .cai バイナリを読んで BackendProgram を構築する */
+BackendProgram *cai_deserialize(const char *path);
 void            cai_free(BackendProgram *prog);
-void            cai_dump(const BackendProgram *prog);  /* デバッグ出力 */
-
-
+void            cai_dump(const BackendProgram *prog);

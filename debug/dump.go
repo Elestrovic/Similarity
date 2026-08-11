@@ -635,24 +635,26 @@ func dumpBFStmt(s backend.BFStmt, depth int, ind string, blockIdx *int) {
 	switch s.Kind {
 	case backend.BFStmtVariable:
 		fmt.Printf("%sVariable(%s)  size=%d  ptr=%v  = %s\n",
-			ind, s.VarName, s.VarSize, s.VarPtr, s.Expr)
+			ind, s.VarName, s.VarSize, s.VarPtr, dumpBFExpr(&s.Value))
 
 	case backend.BFStmtMutation:
 		fmt.Printf("%sMutation(%s)  size=%d  ptr=%v  = %s\n",
-			ind, s.VarName, s.VarSize, s.VarPtr, s.Expr)
+			ind, s.VarName, s.VarSize, s.VarPtr, dumpBFExpr(&s.Value))
 
 	case backend.BFStmtIncr:
+		op := "++"
+		if s.IncrIsDec {
+			op = "--"
+		}
 		fmt.Printf("%sIncr(%s %s)  size=%d  ptr=%v\n",
-			ind, s.IncrName, s.IncrOp, s.IncrSize, s.IncrPtr)
+			ind, s.IncrName, op, s.IncrSize, s.IncrPtr)
 
 	case backend.BFStmtLoop:
 		fmt.Printf("%sBlock #%d  kind=loop  depth=%d\n", ind, *blockIdx, s.LoopDepth)
 		*blockIdx++
 		c := s.LoopCond
-		fmt.Printf("%s  Cond: %s(%s[sz=%d ptr=%v] : %s[sz=%d ptr=%v])\n",
-			ind, c.Op,
-			c.Left, c.LeftSize, c.LeftPtr,
-			c.Right, c.RightSize, c.RightPtr)
+		fmt.Printf("%s  Cond: %s(%s : %s)\n",
+			ind, c.Op, dumpBFExpr(&c.Left), dumpBFExpr(&c.Right))
 		fmt.Printf("%s  Statements\n", ind)
 		dumpBFStmts(s.LoopBody, depth+2, blockIdx)
 
@@ -660,10 +662,8 @@ func dumpBFStmt(s backend.BFStmt, depth int, ind string, blockIdx *int) {
 		fmt.Printf("%sBlock #%d  kind=if\n", ind, *blockIdx)
 		*blockIdx++
 		c := s.IfCond
-		fmt.Printf("%s  Cond: %s(%s[sz=%d ptr=%v] : %s[sz=%d ptr=%v])\n",
-			ind, c.Op,
-			c.Left, c.LeftSize, c.LeftPtr,
-			c.Right, c.RightSize, c.RightPtr)
+		fmt.Printf("%s  Cond: %s(%s : %s)\n",
+			ind, c.Op, dumpBFExpr(&c.Left), dumpBFExpr(&c.Right))
 		if len(s.IfTrue) > 0 {
 			fmt.Printf("%s  True:\n", ind)
 			dumpBFStmts(s.IfTrue, depth+2, blockIdx)
@@ -675,18 +675,18 @@ func dumpBFStmt(s backend.BFStmt, depth int, ind string, blockIdx *int) {
 
 	case backend.BFStmtReturn:
 		fmt.Printf("%sReturn  size=%d  ptr=%v  = %s\n",
-			ind, s.RetSize, s.RetPtr, s.RetExpr)
+			ind, s.RetSize, s.RetPtr, dumpBFExpr(&s.RetVal))
 
 	case backend.BFStmtReturnVoid:
 		fmt.Printf("%sReturn(void)\n", ind)
 
 	case backend.BFStmtCall:
-		fmt.Printf("%sCall(%s)  ret_size=%d  ret_ptr=%v\n",
-			ind, s.CallName, s.CallRetSize, s.CallRetPtr)
+		fmt.Printf("%sCall  = %s\n", ind, dumpBFExpr(&s.Value))
 
 	case backend.BFStmtArrStore:
-		fmt.Printf("%sArrStore(%s)  elem_size=%d  elem_ptr=%v\n",
-			ind, s.ArrName, s.ElemSize, s.ElemPtr)
+		fmt.Printf("%sArrStore(%s)  elem_size=%d  elem_ptr=%v  [%s] = %s\n",
+			ind, s.ArrName, s.ElemSize, s.ElemPtr,
+			dumpBFExpr(&s.ArrIndex), dumpBFExpr(&s.ArrVal))
 
 	case backend.BFStmtBreak:
 		fmt.Printf("%sBreak\n", ind)
@@ -698,4 +698,33 @@ func dumpBFStmt(s backend.BFStmt, depth int, ind string, blockIdx *int) {
 		fmt.Printf("%sRawMem[risk]\n", ind)
 		dumpBFStmts(s.RawMemBody, depth+1, blockIdx)
 	}
+}
+
+func dumpBFExpr(e *backend.BFExpr) string {
+	if e == nil {
+		return "(nil)"
+	}
+	switch e.Kind {
+	case backend.BFExprLitInt:
+		return fmt.Sprintf("LIT_INT(%d)[sz=%d]", e.IntVal, e.ResultSize)
+	case backend.BFExprLitFloat:
+		return fmt.Sprintf("LIT_FLOAT(%g)", e.FloatVal)
+	case backend.BFExprLitStr:
+		return fmt.Sprintf("LIT_STR(%q)", e.StrVal)
+	case backend.BFExprIdent:
+		return fmt.Sprintf("IDENT(%s)[sz=%d ptr=%v]", e.IdentName, e.ResultSize, e.ResultPtr)
+	case backend.BFExprBinop:
+		return fmt.Sprintf("BINOP(%s %s %s)", dumpBFExpr(e.Lhs), e.BinOp, dumpBFExpr(e.Rhs))
+	case backend.BFExprCall:
+		return fmt.Sprintf("CALL(%s argc=%d)", e.FuncName, len(e.Args))
+	case backend.BFExprCast:
+		return fmt.Sprintf("CAST[sz=%d](%s)", e.ResultSize, dumpBFExpr(e.Inner))
+	case backend.BFExprArrLoad:
+		return fmt.Sprintf("ARRLOAD(%s[%s])", e.ArrName, dumpBFExpr(e.ArrIndex))
+	case backend.BFExprAddr:
+		return fmt.Sprintf("ADDR(%s)", e.RefName)
+	case backend.BFExprDeref:
+		return fmt.Sprintf("DEREF(%s)[sz=%d]", e.RefName, e.ResultSize)
+	}
+	return fmt.Sprintf("EXPR_?(%d)", e.Kind)
 }

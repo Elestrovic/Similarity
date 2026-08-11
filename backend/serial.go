@@ -1,327 +1,569 @@
-// Package backend: Annotated ASTをCバックエンドへ渡すためのシリアライザ。
+// serial.go: Go BackendFunction → バイナリ .cai へのシリアライザ。
 //
-// GoはAnnotated ASTを独自テキスト形式（.cai）にシリアライズし、
-// Cバックエンドがそれを読んでC側BackendFunctionを構築する。
+// 設計方針:
+//   - Go BackendFunction をそのままバイナリ化する。中間表現ではない。
+//   - C側の deserializer が読んで C BackendFunction を復元するだけ。
+//   - Analyzerが付与したAnnotation情報をそのまま出力する（再計算しない）。
+//   - 型推論・名前解決は行わない。
 //
-// CAI形式の設計方針:
-//   - 1行1要素。ネストはインデントで表現しない（キーワードで区切る）
-//   - Cのパーサが sscanf/strcmp だけで読める単純な構造にする
-//   - Analyzerが付与したAnnotation情報をそのまま出力する（再計算しない）
-//   - 型推論・名前解決は行わない（Analyzerが保証済みの情報のみ使う）
+// バイナリ形式（little-endian）:
+//   プリミティブ:
+//     u8    1バイト
+//     i32   4バイト signed little-endian
+//     i64   8バイト signed little-endian
+//     f32   4バイト IEEE 754 little-endian
+//     bool  u8 (0=false, 1=true)
+//     str   [u32: byteLen][bytes] (NUL終端なし)
 //
-// CAI形式の概要:
+//   ファイルヘッダ:
+//     [u32: magic=0x43414942]  "CAIB"
+//     [u32: version=1]
+//     [u32: func_count]
 //
-//	FUNC <name> <is_public:0|1> <return_size> <return_is_ptr:0|1>
-//	PARAM <name> <size> <is_ptr:0|1>
-//	...
-//	LOCAL <name> <size> <is_ptr:0|1>
-//	...
-//	BODY
-//	  <stmt> ...
-//	ENDFUNC
+//   FUNC:
+//     [str: name][bool: is_public][i32: return_size][bool: return_is_ptr]
+//     [u32: param_count] PARAM*
+//     [u32: local_count] LOCAL*
+//     [u32: stmt_count]  STMT*
 //
-// stmtの種類:
+//   PARAM / LOCAL:
+//     [str: name][i32: size][bool: is_ptr]
 //
-//	STORE <dst_name> <size> <is_ptr:0|1> <expr>
-//	  expr: LIT_INT <val> | LIT_STR <val> | IDENT <name> <size> <is_ptr>
-//	       | EXPR <op> <size> <is_ptr> <lhs_expr> <rhs_expr>
-//	       | CALL <funcname> <return_size> <return_is_ptr> <argc> [<arg_expr>...]
-//	INCR <name> <size> <is_ptr:0|1> <op:INC|DEC>
-//	LOOP <depth>
-//	  COND <op> <left_name> <left_size> <left_is_ptr> <right_name> <right_size> <right_is_ptr>
-//	  LOOPBODY
-//	    <stmt>...
-//	ENDLOOP
-//	IF
-//	  COND <op> <left> <left_size> <left_is_ptr> <right> <right_size> <right_is_ptr>
-//	  IFTRUE
-//	    <stmt>...
-//	  IFFALSE
-//	    <stmt>...
-//	ENDIF
-//	RET <size> <is_ptr:0|1> <expr>
-//	RET_VOID
+//   STMT: [u8: kind] + kind別フィールド（backend_func.goのBFStmtKind参照）
+//
+//   EXPR: [u8: kind][i32: result_size][bool: result_is_ptr] + kind別フィールド
+//
+//   COND: [str: op][EXPR: left][EXPR: right]
 package backend
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
+	"os"
 	"strings"
 
 	"similarity/ast"
 )
 
-// Serialize はAnnotated ast.ProgramをBIR形式テキストに変換して返す。
-// Analyzerが付与したAnnotationをそのまま使用する。型推論・名前解決は行わない。
-func Serialize(prog *ast.Program) string {
+var caibMagic = [4]byte{'C', 'A', 'I', 'B'}
+
+// Serialize はAnnotated ast.ProgramをCAIバイナリ形式に変換して返す。
+func Serialize(prog *ast.Program) ([]byte, error) {
+	w := &binWriter{}
+	// ヘッダ
+	w.raw(caibMagic[:])
+	w.u32(1) // version
+	funcs := collectFuncs(prog)
+	w.u32(uint32(len(funcs)))
+	for _, fn := range funcs {
+		if err := serializeFunc(w, fn); err != nil {
+			return nil, err
+		}
+	}
+	return w.buf, nil
+}
+
+// WriteBinary はCAIバイナリをファイルに書き出す。
+func WriteBinary(prog *ast.Program, path string) error {
+	data, err := Serialize(prog)
+	if err != nil {
+		return fmt.Errorf("serialize失敗: %w", err)
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func collectFuncs(prog *ast.Program) []*ast.FuncNode {
+	var out []*ast.FuncNode
+	for _, stmt := range prog.Statements {
+		if fn, ok := stmt.(*ast.FuncNode); ok {
+			out = append(out, fn)
+		}
+	}
+	return out
+}
+
+// ===== FUNC =====
+
+func serializeFunc(w *binWriter, fn *ast.FuncNode) error {
+	w.str(fn.Name)
+	w.bool_(fn.Public)
+	w.i32(int32(fn.ReturnAnn.Size))
+	w.bool_(fn.ReturnAnn.IsPtr)
+
+	// PARAMs
+	w.u32(uint32(len(fn.Params)))
+	for _, p := range fn.Params {
+		w.str(p.Name)
+		w.i32(int32(p.Ann.Size))
+		w.bool_(p.Ann.IsPtr)
+	}
+
+	// LOCALs
+	w.u32(uint32(len(fn.LocalVars)))
+	for _, lv := range fn.LocalVars {
+		w.str(lv.Name)
+		w.i32(int32(lv.Ann.Size))
+		w.bool_(lv.Ann.IsPtr)
+	}
+
+	// STMTs
+	w.u32(uint32(len(fn.Body)))
+	for _, node := range fn.Body {
+		if err := serializeStmt(w, node); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ===== STMT =====
+
+func serializeStmt(w *binWriter, node ast.Node) error {
+	if node == nil {
+		return nil
+	}
+	switch n := node.(type) {
+	case *ast.VariableNode:
+		// kind=0: STORE (Variable)
+		w.u8(0)
+		w.str(n.Name)
+		w.i32(int32(n.Ann.Size))
+		w.bool_(n.Ann.IsPtr)
+		return serializeExpr(w, n.Value, n.Ann)
+
+	case *ast.MutationNode:
+		// kind=1: STORE (Mutation)
+		w.u8(1)
+		w.str(n.Name)
+		w.i32(int32(n.Ann.Size))
+		w.bool_(n.Ann.IsPtr)
+		return serializeExpr(w, n.Value, n.Ann)
+
+	case *ast.IncrNode:
+		// kind=2: INCR
+		w.u8(2)
+		w.str(n.Name)
+		w.i32(int32(n.Ann.Size))
+		w.bool_(n.Ann.IsPtr)
+		w.bool_(n.Op == "--")
+		return nil
+
+	case *ast.LoopNode:
+		// kind=3: LOOP
+		w.u8(3)
+		w.i32(int32(n.LoopDepth))
+		if err := serializeCond(w, n.Condition); err != nil {
+			return err
+		}
+		w.u32(uint32(len(n.Body)))
+		for _, s := range n.Body {
+			if err := serializeStmt(w, s); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case *ast.IfNode:
+		// kind=4: IF
+		w.u8(4)
+		if err := serializeCond(w, n.Condition); err != nil {
+			return err
+		}
+		w.u32(uint32(len(n.True)))
+		for _, s := range n.True {
+			if err := serializeStmt(w, s); err != nil {
+				return err
+			}
+		}
+		w.u32(uint32(len(n.False)))
+		for _, s := range n.False {
+			if err := serializeStmt(w, s); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case *ast.ReturnNode:
+		if n.Value == nil {
+			// kind=6: RET_VOID
+			w.u8(6)
+			return nil
+		}
+		// kind=5: RET
+		w.u8(5)
+		w.i32(int32(n.Ann.Size))
+		w.bool_(n.Ann.IsPtr)
+		return serializeExpr(w, n.Value, n.Ann)
+
+	case *ast.ArrayStoreNode:
+		// kind=8: ARRSTORE
+		w.u8(8)
+		w.str(n.Name)
+		w.i32(int32(n.ElemAnn.Size))
+		w.bool_(n.ElemAnn.IsPtr)
+		if err := serializeExpr(w, n.Index, ast.TypeSize{Size: 4}); err != nil {
+			return err
+		}
+		return serializeExpr(w, n.Value, n.ElemAnn)
+
+	case *ast.RawMemNode:
+		// kind=11: RAWMEM（risk{}ブロック内部をそのまま展開）
+		// riskブロックはC側で特別扱いせず、中の文をそのまま連続出力する
+		for _, s := range n.Body {
+			if err := serializeStmt(w, s); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case *ast.BreakNode:
+		// kind=9: BREAK
+		w.u8(9)
+		return nil
+
+	case *ast.ContinueNode:
+		// kind=10: CONTINUE
+		w.u8(10)
+		return nil
+
+	case *ast.CallNode:
+		// kind=7: CALL_STMT（式文としてのCall、戻り値不使用）
+		w.u8(7)
+		return serializeExpr(w, n, n.ReturnAnn)
+	}
+	return nil
+}
+
+// ===== COND =====
+
+// serializeCond は [str: op][EXPR: left][EXPR: right] を出力する。
+// ConditionNode.Left/Right は string（変数名 or 数値リテラル）。
+// Analyzerが付与した LeftAnn/RightAnn を使い IDENT/LIT_INT の EXPR に変換する。
+func serializeCond(w *binWriter, node ast.Node) error {
+	cond, ok := node.(*ast.ConditionNode)
+	if !ok {
+		// フォールバック: ne(0, 0)
+		w.str("ne")
+		serializeCondOperand(w, "0", ast.TypeSize{Size: 4})
+		serializeCondOperand(w, "0", ast.TypeSize{Size: 4})
+		return nil
+	}
+	w.str(cond.Op)
+	serializeCondOperand(w, cond.Left, cond.LeftAnn)
+	serializeCondOperand(w, cond.Right, cond.RightAnn)
+	return nil
+}
+
+// serializeCondOperand はConditionNode.Left/Right（string）をEXPRとして出力する。
+func serializeCondOperand(w *binWriter, s string, ann ast.TypeSize) {
+	if isLiteral(s) {
+		val := parseInt64Str(s)
+		// EXPR: kind=LIT_INT(0), result_size, result_is_ptr, i64 val
+		w.u8(0)
+		w.i32(int32(ann.Size))
+		w.bool_(ann.IsPtr)
+		w.i64(val)
+	} else {
+		// EXPR: kind=IDENT(3), result_size, result_is_ptr, str name
+		w.u8(3)
+		w.i32(int32(ann.Size))
+		w.bool_(ann.IsPtr)
+		w.str(s)
+	}
+}
+
+func isLiteral(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	start := 0
+	if s[0] == '-' {
+		if len(s) == 1 {
+			return false
+		}
+		start = 1
+	}
+	for i := start; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseInt64Str(s string) int64 {
+	neg := false
+	start := 0
+	if len(s) > 0 && s[0] == '-' {
+		neg = true
+		start = 1
+	}
+	var val int64
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			break
+		}
+		val = val*10 + int64(c-'0')
+	}
+	if neg {
+		val = -val
+	}
+	return val
+}
+
+// ===== EXPR =====
+
+// serializeExpr は [u8: kind][i32: result_size][bool: result_is_ptr][payload] を出力する。
+// hint は Ann情報が直接取れない場合のフォールバック。
+func serializeExpr(w *binWriter, node ast.Node, hint ast.TypeSize) error {
+	if node == nil {
+		// LIT_INT 0 としてフォールバック
+		w.u8(0) // kind=LIT_INT
+		w.i32(int32(hint.Size))
+		w.bool_(hint.IsPtr)
+		w.i64(0)
+		return nil
+	}
+	switch n := node.(type) {
+	case *ast.LiteralNode:
+		return serializeLiteral(w, n)
+
+	case *ast.ExprNode:
+		// kind=4: BINOP
+		w.u8(4)
+		w.i32(int32(n.Ann.Size))
+		w.bool_(n.Ann.IsPtr)
+		w.str(n.Op)
+		if err := serializeExpr(w, n.Left, n.Ann); err != nil {
+			return err
+		}
+		return serializeExpr(w, n.Right, n.Ann)
+
+	case *ast.CallNode:
+		// kind=5: CALL
+		w.u8(5)
+		w.i32(int32(n.ReturnAnn.Size))
+		w.bool_(n.ReturnAnn.IsPtr)
+		w.str(n.FuncName)
+		w.u32(uint32(len(n.Args)))
+		for _, arg := range n.Args {
+			if err := serializeExpr(w, arg, ast.TypeSize{Size: 4}); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case *ast.CastNode:
+		// kind=6: CAST
+		w.u8(6)
+		w.i32(int32(n.Ann.Size))
+		w.bool_(n.Ann.IsPtr)
+		return serializeExpr(w, n.Value, n.Ann)
+
+	case *ast.IndexNode:
+		// kind=7: ARRLOAD
+		w.u8(7)
+		w.i32(int32(n.ElemAnn.Size))
+		w.bool_(n.ElemAnn.IsPtr)
+		w.str(n.Name)
+		return serializeExpr(w, n.Index, ast.TypeSize{Size: 4})
+
+	case *ast.AddressNode:
+		// kind=8: ADDR
+		w.u8(8)
+		w.i32(8) // ポインタは常に8バイト
+		w.bool_(true)
+		w.str(n.Name)
+		return nil
+
+	case *ast.DerefNode:
+		// kind=9: DEREF
+		w.u8(9)
+		w.i32(int32(hint.Size))
+		w.bool_(false)
+		w.str(n.Name)
+		return nil
+	}
+	// 未知ノード: LIT_INT 0 としてフォールバック
+	w.u8(0)
+	w.i32(int32(hint.Size))
+	w.bool_(hint.IsPtr)
+	w.i64(0)
+	return nil
+}
+
+func serializeLiteral(w *binWriter, n *ast.LiteralNode) error {
+	switch n.Kind {
+	case "INT_LIT":
+		val, err := parseIntLiteral(n.Value)
+		if err != nil {
+			return fmt.Errorf("INT_LIT parse失敗 %q: %w", n.Value, err)
+		}
+		w.u8(0) // kind=LIT_INT
+		w.i32(int32(n.Ann.Size))
+		w.bool_(n.Ann.IsPtr)
+		w.i64(val)
+		return nil
+
+	case "FLOAT_LIT":
+		w.u8(1) // kind=LIT_FLOAT
+		w.i32(4)
+		w.bool_(false)
+		w.f32(parseFloat32Str(n.Value))
+		return nil
+
+	case "BOOL_LIT":
+		var val int64
+		if n.Value == "true" {
+			val = 1
+		}
+		w.u8(0) // kind=LIT_INT
+		w.i32(4)
+		w.bool_(false)
+		w.i64(val)
+		return nil
+
+	case "STRING_LIT":
+		w.u8(2) // kind=LIT_STR
+		w.i32(8)
+		w.bool_(true)
+		w.str(n.Value)
+		return nil
+
+	case "IDENT":
+		w.u8(3) // kind=IDENT
+		w.i32(int32(n.Ann.Size))
+		w.bool_(n.Ann.IsPtr)
+		w.str(n.Value)
+		return nil
+	}
+	// フォールバック
+	w.u8(0)
+	w.i32(4)
+	w.bool_(false)
+	w.i64(0)
+	return nil
+}
+
+func parseIntLiteral(s string) (int64, error) {
+	if len(s) == 0 {
+		return 0, fmt.Errorf("空文字列")
+	}
+	neg := false
+	start := 0
+	if s[0] == '-' {
+		neg = true
+		start = 1
+	}
+	if start >= len(s) {
+		return 0, fmt.Errorf("数値がない: %q", s)
+	}
+	var val int64
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("非数値文字 %q in %q", c, s)
+		}
+		val = val*10 + int64(c-'0')
+	}
+	if neg {
+		val = -val
+	}
+	return val, nil
+}
+
+func parseFloat32Str(s string) float32 {
+	neg := false
+	i := 0
+	if len(s) > 0 && s[0] == '-' {
+		neg = true
+		i = 1
+	}
+	intPart := float64(0)
+	for i < len(s) && s[i] != '.' {
+		intPart = intPart*10 + float64(s[i]-'0')
+		i++
+	}
+	fracPart := float64(0)
+	fracDiv := float64(1)
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) {
+			fracPart = fracPart*10 + float64(s[i]-'0')
+			fracDiv *= 10
+			i++
+		}
+	}
+	f := intPart + fracPart/fracDiv
+	if neg {
+		f = -f
+	}
+	return float32(f)
+}
+
+// ===== binWriter =====
+
+type binWriter struct {
+	buf []byte
+}
+
+func (w *binWriter) raw(b []byte) {
+	w.buf = append(w.buf, b...)
+}
+
+func (w *binWriter) u8(v uint8) {
+	w.buf = append(w.buf, v)
+}
+
+func (w *binWriter) bool_(v bool) {
+	if v {
+		w.buf = append(w.buf, 1)
+	} else {
+		w.buf = append(w.buf, 0)
+	}
+}
+
+func (w *binWriter) u32(v uint32) {
+	var b [4]byte
+	binary.LittleEndian.PutUint32(b[:], v)
+	w.buf = append(w.buf, b[:]...)
+}
+
+func (w *binWriter) i32(v int32) {
+	w.u32(uint32(v))
+}
+
+func (w *binWriter) i64(v int64) {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], uint64(v))
+	w.buf = append(w.buf, b[:]...)
+}
+
+func (w *binWriter) f32(v float32) {
+	w.u32(math.Float32bits(v))
+}
+
+func (w *binWriter) str(s string) {
+	w.u32(uint32(len(s)))
+	w.buf = append(w.buf, []byte(s)...)
+}
+
+// ===== 後方互換: テキスト形式（旧 Serialize） =====
+// テキスト形式はデバッグ用として残す。バイナリが正式形式。
+
+// SerializeText はデバッグ用のテキスト形式を返す（バイナリ形式が正式）。
+func SerializeText(prog *ast.Program) string {
 	var sb strings.Builder
-	sb.WriteString("CAI 1\n") // バージョンヘッダ
+	sb.WriteString("CAIB_TEXT 1\n")
 	for _, stmt := range prog.Statements {
 		fn, ok := stmt.(*ast.FuncNode)
 		if !ok {
 			continue
 		}
-		serializeFunc(&sb, fn)
+		fmt.Fprintf(&sb, "FUNC %s public=%v ret=%d ptr=%v\n",
+			fn.Name, fn.Public, fn.ReturnAnn.Size, fn.ReturnAnn.IsPtr)
 	}
 	return sb.String()
-}
-
-func serializeFunc(sb *strings.Builder, fn *ast.FuncNode) {
-	isPublic := 0
-	if fn.Public {
-		isPublic = 1
-	}
-	isPtr := 0
-	if fn.ReturnAnn.IsPtr {
-		isPtr = 1
-	}
-	// FUNC <name> <is_public> <return_size> <return_is_ptr>
-	fmt.Fprintf(sb, "FUNC %s %d %d %d\n", fn.Name, isPublic, fn.ReturnAnn.Size, isPtr)
-
-	// PARAM lines（Analyzerが付与したAnnを使う）
-	for _, p := range fn.Params {
-		pip := 0
-		if p.Ann.IsPtr {
-			pip = 1
-		}
-		fmt.Fprintf(sb, "PARAM %s %d %d\n", p.Name, p.Ann.Size, pip)
-	}
-
-	// LOCAL lines（FuncNode.LocalVarsを使う。引数は含まない）
-	for _, lv := range fn.LocalVars {
-		lip := 0
-		if lv.Ann.IsPtr {
-			lip = 1
-		}
-		fmt.Fprintf(sb, "LOCAL %s %d %d\n", lv.Name, lv.Ann.Size, lip)
-	}
-
-	// BODY
-	sb.WriteString("BODY\n")
-	serializeStmts(sb, fn.Body)
-
-	sb.WriteString("ENDFUNC\n\n")
-}
-
-func serializeStmts(sb *strings.Builder, stmts []ast.Node) {
-	for _, s := range stmts {
-		serializeStmt(sb, s)
-	}
-}
-
-func serializeStmt(sb *strings.Builder, node ast.Node) {
-	if node == nil {
-		return
-	}
-	switch n := node.(type) {
-	case *ast.VariableNode:
-		// STORE: 変数の初期化（宣言と代入を同時に行う）
-		ip := 0
-		if n.Ann.IsPtr {
-			ip = 1
-		}
-		fmt.Fprintf(sb, "STORE %s %d %d ", n.Name, n.Ann.Size, ip)
-		serializeExpr(sb, n.Value, n.Ann)
-		sb.WriteByte('\n')
-
-	case *ast.MutationNode:
-		// STORE: 変数への代入（MutationNode.Annを使う）
-		ip := 0
-		if n.Ann.IsPtr {
-			ip = 1
-		}
-		fmt.Fprintf(sb, "STORE %s %d %d ", n.Name, n.Ann.Size, ip)
-		serializeExpr(sb, n.Value, n.Ann)
-		sb.WriteByte('\n')
-
-	case *ast.IncrNode:
-		// INCR: ++/--
-		ip := 0
-		if n.Ann.IsPtr {
-			ip = 1
-		}
-		op := "INC"
-		if n.Op == "--" {
-			op = "DEC"
-		}
-		fmt.Fprintf(sb, "INCR %s %d %d %s\n", n.Name, n.Ann.Size, ip, op)
-
-	case *ast.LoopNode:
-		// LOOP <depth>
-		fmt.Fprintf(sb, "LOOP %d\n", n.LoopDepth)
-		serializeCond(sb, n.Condition)
-		sb.WriteString("LOOPBODY\n")
-		serializeStmts(sb, n.Body)
-		sb.WriteString("ENDLOOP\n")
-
-	case *ast.IfNode:
-		sb.WriteString("IF\n")
-		serializeCond(sb, n.Condition)
-		sb.WriteString("IFTRUE\n")
-		serializeStmts(sb, n.True)
-		sb.WriteString("IFFALSE\n")
-		serializeStmts(sb, n.False)
-		sb.WriteString("ENDIF\n")
-
-	case *ast.ReturnNode:
-		if n.Value == nil {
-			sb.WriteString("RET_VOID\n")
-			return
-		}
-		ip := 0
-		if n.Ann.IsPtr {
-			ip = 1
-		}
-		fmt.Fprintf(sb, "RET %d %d ", n.Ann.Size, ip)
-		serializeExpr(sb, n.Value, n.Ann)
-		sb.WriteByte('\n')
-
-	case *ast.RawMemNode:
-		// riskブロック: 内部のstmtをそのまま出力
-		for _, s := range n.Body {
-			serializeStmt(sb, s)
-		}
-
-	case *ast.ArrayStoreNode:
-		// 配列要素書き込み: ARRSTORE <name> <elem_size> <elem_is_ptr> <index_expr> <value_expr>
-		ip := 0
-		if n.ElemAnn.IsPtr {
-			ip = 1
-		}
-		fmt.Fprintf(sb, "ARRSTORE %s %d %d ", n.Name, n.ElemAnn.Size, ip)
-		serializeExpr(sb, n.Index, ast.TypeSize{Size: 4})
-		sb.WriteByte(' ')
-		serializeExpr(sb, n.Value, n.ElemAnn)
-		sb.WriteByte('\n')
-
-	// BreakNode / ContinueNode
-	case *ast.BreakNode:
-		sb.WriteString("BREAK\n")
-	case *ast.ContinueNode:
-		sb.WriteString("CONTINUE\n")
-	}
-}
-
-// serializeCond はConditionNodeをCOND行として出力する。
-// ConditionNode.LeftAnn / RightAnn はAnalyzerが付与済み。
-func serializeCond(sb *strings.Builder, node ast.Node) {
-	cond, ok := node.(*ast.ConditionNode)
-	if !ok {
-		// ConditionNodeでない場合（ExprNodeが条件に来るケース）は非0チェックとして扱う
-		sb.WriteString("COND ne ")
-		serializeExpr(sb, node, ast.TypeSize{Size: 4})
-		sb.WriteString(" LIT_INT 0\n")
-		return
-	}
-	lip := 0
-	if cond.LeftAnn.IsPtr {
-		lip = 1
-	}
-	rip := 0
-	if cond.RightAnn.IsPtr {
-		rip = 1
-	}
-	// COND <op> <left> <left_size> <left_is_ptr> <right> <right_size> <right_is_ptr>
-	fmt.Fprintf(sb, "COND %s %s %d %d %s %d %d\n",
-		cond.Op,
-		cond.Left, cond.LeftAnn.Size, lip,
-		cond.Right, cond.RightAnn.Size, rip,
-	)
-}
-
-// serializeExpr は式ノードをインライン形式で出力する。
-// 形式: <kind> [<fields>...]
-// Cのパーサはこれをscanfでトークンとして読む。
-func serializeExpr(sb *strings.Builder, node ast.Node, hint ast.TypeSize) {
-	if node == nil {
-		// 空の式: サイズhintでゼロリテラルを出力
-		fmt.Fprintf(sb, "LIT_INT 0")
-		return
-	}
-	switch n := node.(type) {
-	case *ast.LiteralNode:
-		serializeLiteral(sb, n)
-
-	case *ast.ExprNode:
-		// EXPR <op> <result_size> <result_is_ptr> <lhs> <rhs>
-		ip := 0
-		if n.Ann.IsPtr {
-			ip = 1
-		}
-		fmt.Fprintf(sb, "EXPR %s %d %d ", n.Op, n.Ann.Size, ip)
-		serializeExpr(sb, n.Left, n.Ann)
-		sb.WriteByte(' ')
-		serializeExpr(sb, n.Right, n.Ann)
-
-	case *ast.CallNode:
-		// CALL <funcname> <return_size> <return_is_ptr> <argc> [<arg_expr>...]
-		ip := 0
-		if n.ReturnAnn.IsPtr {
-			ip = 1
-		}
-		fmt.Fprintf(sb, "CALL %s %d %d %d", n.FuncName, n.ReturnAnn.Size, ip, len(n.Args))
-		for _, arg := range n.Args {
-			sb.WriteByte(' ')
-			serializeExpr(sb, arg, ast.TypeSize{Size: 4})
-		}
-
-	case *ast.CastNode:
-		// CAST <result_size> <result_is_ptr> <inner_expr>
-		ip := 0
-		if n.Ann.IsPtr {
-			ip = 1
-		}
-		fmt.Fprintf(sb, "CAST %d %d ", n.Ann.Size, ip)
-		serializeExpr(sb, n.Value, n.Ann)
-
-	case *ast.IndexNode:
-		// ARRLOAD <name> <elem_size> <elem_is_ptr> <index_expr>
-		ip := 0
-		if n.ElemAnn.IsPtr {
-			ip = 1
-		}
-		fmt.Fprintf(sb, "ARRLOAD %s %d %d ", n.Name, n.ElemAnn.Size, ip)
-		serializeExpr(sb, n.Index, ast.TypeSize{Size: 4})
-
-	case *ast.AddressNode:
-		// ADDR <name>
-		fmt.Fprintf(sb, "ADDR %s", n.Name)
-
-	case *ast.DerefNode:
-		// DEREF <size> <name>  (DerefNodeはNameフィールドのみ持つ)
-		fmt.Fprintf(sb, "DEREF %d %s", hint.Size, n.Name)
-
-	default:
-		// フォールバック: ゼロ
-		sb.WriteString("LIT_INT 0")
-	}
-}
-
-func serializeLiteral(sb *strings.Builder, n *ast.LiteralNode) {
-	switch n.Kind {
-	case "INT_LIT":
-		fmt.Fprintf(sb, "LIT_INT %s", n.Value)
-	case "FLOAT_LIT":
-		fmt.Fprintf(sb, "LIT_FLOAT %s", n.Value)
-	case "BOOL_LIT":
-		v := "0"
-		if n.Value == "true" {
-			v = "1"
-		}
-		fmt.Fprintf(sb, "LIT_INT %s", v)
-	case "STRING_LIT":
-		// 文字列リテラルは .rodata へ。値をエスケープして出力
-		escaped := strings.ReplaceAll(n.Value, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, "\n", "\\n")
-		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
-		fmt.Fprintf(sb, "LIT_STR \"%s\"", escaped)
-	case "IDENT":
-		// 変数参照: IDENT <name> <size> <is_ptr>
-		ip := 0
-		if n.Ann.IsPtr {
-			ip = 1
-		}
-		fmt.Fprintf(sb, "IDENT %s %d %d", n.Value, n.Ann.Size, ip)
-	default:
-		sb.WriteString("LIT_INT 0")
-	}
 }

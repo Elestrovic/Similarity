@@ -35,7 +35,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* CAIファイルを読んでBackendProgramを構築 */
-    BackendProgram *prog = cai_parse(cai_path);
+    BackendProgram *prog = cai_deserialize(cai_path);
     if (!prog) {
         fprintf(stderr, "CAIパース失敗: %s\n", cai_path);
         return 1;

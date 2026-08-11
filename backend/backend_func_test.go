@@ -110,12 +110,12 @@ Function_public[main{
 	if loopStmt.LoopCond.Op != "lesseq" {
 		t.Errorf("LoopCond.Op=%q, want 'lesseq'", loopStmt.LoopCond.Op)
 	}
-	if loopStmt.LoopCond.Left != "i" {
-		t.Errorf("LoopCond.Left=%q, want 'i'", loopStmt.LoopCond.Left)
+	if loopStmt.LoopCond.Left.Kind != backend.BFExprIdent || loopStmt.LoopCond.Left.IdentName != "i" {
+		t.Errorf("LoopCond.Left=%v, want IDENT(i)", loopStmt.LoopCond.Left)
 	}
-	if loopStmt.LoopCond.LeftSize != 4 || loopStmt.LoopCond.LeftPtr {
-		t.Errorf("LoopCond.LeftSize=%d LeftPtr=%v, want 4/false",
-			loopStmt.LoopCond.LeftSize, loopStmt.LoopCond.LeftPtr)
+	if loopStmt.LoopCond.Left.ResultSize != 4 || loopStmt.LoopCond.Left.ResultPtr {
+		t.Errorf("LoopCond.Left ResultSize=%d ResultPtr=%v, want 4/false",
+			loopStmt.LoopCond.Left.ResultSize, loopStmt.LoopCond.Left.ResultPtr)
 	}
 }
 

@@ -358,7 +358,7 @@ static void print_expr_short(const BExpr *e) {
     case EXPR_IDENT:     printf("%s", e->ident_name); break;
     case EXPR_BINOP:
         print_expr_short(e->lhs);
-        printf(" %s ", e->op);
+        printf(" %s ", e->binop);
         print_expr_short(e->rhs);
         break;
     case EXPR_CALL:
@@ -371,14 +371,12 @@ static void print_expr_short(const BExpr *e) {
         break;
     case EXPR_ARRLOAD:
         printf("%s[", e->arr_name);
-        print_expr_short(e->index);
+        print_expr_short(e->arr_index);
         printf("]");
         break;
-    case EXPR_ADDR:   printf("addr(%s)", e->addr_name); break;
+    case EXPR_ADDR:   printf("addr(%s)", e->ref_name); break;
     case EXPR_DEREF:
-        printf("deref(");
-        print_expr_short(e->inner);
-        printf(")");
+        printf("deref(%s)[sz=%d]", e->ref_name, e->result_size);
         break;
     default: printf("expr(%d)", e->kind); break;
     }
@@ -427,10 +425,11 @@ static void dump_block(const CFGBlock *b) {
 
     /* 条件（If / LoopHeader） */
     if (b->has_cond) {
-        printf("  Cond: %s(%s[sz=%d ptr=%d] : %s[sz=%d ptr=%d])\n",
-               b->cond.op,
-               b->cond.left,  b->cond.left_size,  b->cond.left_is_ptr,
-               b->cond.right, b->cond.right_size, b->cond.right_is_ptr);
+        printf("  Cond: %s(", b->cond.op);
+        print_expr_short(b->cond.left);
+        printf(" : ");
+        print_expr_short(b->cond.right);
+        printf(")\n");
     }
 
     /* 文 */

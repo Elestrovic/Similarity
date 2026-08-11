@@ -14,39 +14,78 @@ import (
 // BFVariable はBackendFunctionが扱う変数（引数・ローカル変数）。
 // Analyzerが付与した Ann から生成する。
 type BFVariable struct {
-	Index  int    // v0, v1, ... の番号
-	Name   string // 元の変数名
-	Type   string // 元の型名文字列（表示用のみ）
-	Size   int    // Ann.Size
-	IsPtr  bool   // Ann.IsPtr
+	Index int    // v0, v1, ... の番号
+	Name  string // 元の変数名
+	Type  string // 元の型名文字列（表示用のみ）
+	Size  int    // Ann.Size
+	IsPtr bool   // Ann.IsPtr
 }
 
-// ===== ブロック種別 =====
+// ===== Expr =====
 
-type BFBlockKind int
+// BFExprKind は式の種別。C側のExprKindと1対1で対応する。
+type BFExprKind uint8
 
 const (
-	BFBlockEntry BFBlockKind = iota // 関数エントリ（通常文）
-	BFBlockLoop                     // Loopブロック
-	BFBlockIf                       // Ifブロック
-	BFBlockTrue                     // Ifの真ブロック
-	BFBlockFalse                    // Ifの偽ブロック
+	BFExprLitInt   BFExprKind = 0
+	BFExprLitFloat BFExprKind = 1
+	BFExprLitStr   BFExprKind = 2
+	BFExprIdent    BFExprKind = 3
+	BFExprBinop    BFExprKind = 4
+	BFExprCall     BFExprKind = 5
+	BFExprCast     BFExprKind = 6
+	BFExprArrLoad  BFExprKind = 7
+	BFExprAddr     BFExprKind = 8
+	BFExprDeref    BFExprKind = 9
 )
 
-func (k BFBlockKind) String() string {
-	switch k {
-	case BFBlockEntry:
-		return "entry"
-	case BFBlockLoop:
-		return "loop"
-	case BFBlockIf:
-		return "if"
-	case BFBlockTrue:
-		return "if.true"
-	case BFBlockFalse:
-		return "if.false"
-	}
-	return "unknown"
+// BFExpr はBackendFunctionが扱う式。
+// Analyzerが付与したAnnotationをそのまま保持する。型推論・名前解決は行わない。
+type BFExpr struct {
+	Kind       BFExprKind
+	ResultSize int  // Analyzerが確定したサイズ
+	ResultPtr  bool // Analyzerが確定したポインタ属性
+
+	// LIT_INT
+	IntVal int64
+
+	// LIT_FLOAT
+	FloatVal float32
+
+	// LIT_STR
+	StrVal string
+
+	// IDENT
+	IdentName string
+
+	// BINOP
+	BinOp string
+	Lhs   *BFExpr
+	Rhs   *BFExpr
+
+	// CALL
+	FuncName string
+	Args     []*BFExpr
+
+	// CAST / inner式 (CAST, DEREF用)
+	Inner *BFExpr
+
+	// ARRLOAD
+	ArrName  string
+	ArrIndex *BFExpr
+
+	// ADDR / DEREF
+	RefName string
+}
+
+// ===== Cond =====
+
+// BFCond はConditionNodeから生成した条件情報。
+// Left/RightはAnalyzerが付与したAnnotationをBFExprとして保持する。
+type BFCond struct {
+	Op    string // le/lt/eq/ge/gt/ne
+	Left  BFExpr
+	Right BFExpr
 }
 
 // ===== Statement =====
@@ -54,30 +93,19 @@ func (k BFBlockKind) String() string {
 type BFStmtKind int
 
 const (
-	BFStmtVariable BFStmtKind = iota // Variable宣言（初期化あり）
-	BFStmtMutation                   // Mutation（代入）
-	BFStmtIncr                       // ++/--
-	BFStmtLoop                       // Loopブロック
-	BFStmtIf                         // Ifブロック
-	BFStmtReturn                     // return
-	BFStmtReturnVoid                 // return（void）
-	BFStmtCall                       // 式文としてのCall
-	BFStmtArrStore                   // 配列要素書き込み
-	BFStmtBreak
-	BFStmtContinue
-	BFStmtRawMem // Mem[risk{}]
+	BFStmtVariable  BFStmtKind = 0  // Variable宣言（初期化あり）
+	BFStmtMutation  BFStmtKind = 1  // Mutation（代入）
+	BFStmtIncr      BFStmtKind = 2  // ++/--
+	BFStmtLoop      BFStmtKind = 3  // Loopブロック
+	BFStmtIf        BFStmtKind = 4  // Ifブロック
+	BFStmtReturn    BFStmtKind = 5  // return
+	BFStmtReturnVoid BFStmtKind = 6 // return（void）
+	BFStmtCall      BFStmtKind = 7  // 式文としてのCall
+	BFStmtArrStore  BFStmtKind = 8  // 配列要素書き込み
+	BFStmtBreak     BFStmtKind = 9
+	BFStmtContinue  BFStmtKind = 10
+	BFStmtRawMem    BFStmtKind = 11 // Mem[risk{}]
 )
-
-// BFCond はConditionNodeから生成した条件情報。
-type BFCond struct {
-	Op       string // le/lt/eq/ge/gt/ne
-	Left     string // 左辺の名前（変数名 or リテラル）
-	LeftSize int
-	LeftPtr  bool
-	Right    string // 右辺の名前（変数名 or リテラル）
-	RightSize int
-	RightPtr  bool
-}
 
 // BFStmt はBackendFunctionの文。
 type BFStmt struct {
@@ -87,13 +115,13 @@ type BFStmt struct {
 	VarName string
 	VarSize int
 	VarPtr  bool
-	Expr    string // 式の文字列表現（表示用）
+	Value   BFExpr // 初期化式・代入式
 
 	// BFStmtIncr
 	IncrName string
 	IncrSize int
 	IncrPtr  bool
-	IncrOp   string // "++" or "--"
+	IncrIsDec bool // true="--, false="++"
 
 	// BFStmtLoop
 	LoopDepth int
@@ -101,24 +129,25 @@ type BFStmt struct {
 	LoopBody  []BFStmt
 
 	// BFStmtIf
-	IfCond     BFCond
-	IfTrue     []BFStmt
-	IfFalse    []BFStmt
+	IfCond  BFCond
+	IfTrue  []BFStmt
+	IfFalse []BFStmt
 
 	// BFStmtReturn
 	RetSize int
 	RetPtr  bool
-	RetExpr string // 式の文字列表現（表示用）
+	RetVal  BFExpr
 
 	// BFStmtCall（式文として単独で呼ばれる場合）
-	CallName      string
-	CallRetSize   int
-	CallRetPtr    bool
+	// CallのFuncName/Args/ResultSize/ResultPtrはValueフィールド（BFExpr）に格納
+	// ValueフィールドのKind=BFExprCallを参照する
 
 	// BFStmtArrStore
-	ArrName     string
-	ElemSize    int
-	ElemPtr     bool
+	ArrName    string
+	ElemSize   int
+	ElemPtr    bool
+	ArrIndex   BFExpr
+	ArrVal     BFExpr
 
 	// BFStmtRawMem
 	RawMemBody []BFStmt
@@ -126,16 +155,16 @@ type BFStmt struct {
 
 // ===== BackendFunc =====
 
-// BackendFunc はAnnotated ASTの1関数に対応するGo側のダンプ用構造体。
+// BackendFunc はAnnotated ASTの1関数に対応するGo側の構造体。
 // Cバックエンドが持つ BackendFunction と1対1で対応する。
 type BackendFunc struct {
-	Name      string
-	IsPublic  bool
-	Params    []BFVariable
-	Locals    []BFVariable // LocalVarsから生成。v0, v1, ...と番号付け
-	RetSize   int
-	RetPtr    bool
-	Stmts     []BFStmt
+	Name     string
+	IsPublic bool
+	Params   []BFVariable
+	Locals   []BFVariable // LocalVarsから生成
+	RetSize  int
+	RetPtr   bool
+	Stmts    []BFStmt
 }
 
 // ===== 変換: ast.FuncNode → BackendFunc =====
@@ -150,7 +179,6 @@ func BuildBackendFunc(fn *ast.FuncNode) BackendFunc {
 		RetPtr:   fn.ReturnAnn.IsPtr,
 	}
 
-	// 引数: Params[i].Ann はAnalyzerが付与済み
 	for i, p := range fn.Params {
 		bf.Params = append(bf.Params, BFVariable{
 			Index: i,
@@ -161,7 +189,6 @@ func BuildBackendFunc(fn *ast.FuncNode) BackendFunc {
 		})
 	}
 
-	// ローカル変数: LocalVarsはAnalyzerが収集済み
 	for i, lv := range fn.LocalVars {
 		bf.Locals = append(bf.Locals, BFVariable{
 			Index: i,
@@ -172,7 +199,6 @@ func BuildBackendFunc(fn *ast.FuncNode) BackendFunc {
 		})
 	}
 
-	// Body → BFStmt列
 	bf.Stmts = buildStmts(fn.Body)
 	return bf
 }
@@ -213,7 +239,7 @@ func buildStmt(node ast.Node) (BFStmt, bool) {
 			VarName: n.Name,
 			VarSize: n.Ann.Size,
 			VarPtr:  n.Ann.IsPtr,
-			Expr:    exprStr(n.Value),
+			Value:   buildExpr(n.Value, n.Ann),
 		}, true
 
 	case *ast.MutationNode:
@@ -222,22 +248,22 @@ func buildStmt(node ast.Node) (BFStmt, bool) {
 			VarName: n.Name,
 			VarSize: n.Ann.Size,
 			VarPtr:  n.Ann.IsPtr,
-			Expr:    exprStr(n.Value),
+			Value:   buildExpr(n.Value, n.Ann),
 		}, true
 
 	case *ast.IncrNode:
 		return BFStmt{
-			Kind:     BFStmtIncr,
-			IncrName: n.Name,
-			IncrSize: n.Ann.Size,
-			IncrPtr:  n.Ann.IsPtr,
-			IncrOp:   n.Op,
+			Kind:      BFStmtIncr,
+			IncrName:  n.Name,
+			IncrSize:  n.Ann.Size,
+			IncrPtr:   n.Ann.IsPtr,
+			IncrIsDec: n.Op == "--",
 		}, true
 
 	case *ast.LoopNode:
 		return BFStmt{
 			Kind:      BFStmtLoop,
-			LoopDepth: n.LoopDepth, // Analyzerが付与済み
+			LoopDepth: n.LoopDepth,
 			LoopCond:  buildCond(n.Condition),
 			LoopBody:  buildStmts(n.Body),
 		}, true
@@ -258,7 +284,7 @@ func buildStmt(node ast.Node) (BFStmt, bool) {
 			Kind:    BFStmtReturn,
 			RetSize: n.Ann.Size,
 			RetPtr:  n.Ann.IsPtr,
-			RetExpr: exprStr(n.Value),
+			RetVal:  buildExpr(n.Value, n.Ann),
 		}, true
 
 	case *ast.ArrayStoreNode:
@@ -267,6 +293,8 @@ func buildStmt(node ast.Node) (BFStmt, bool) {
 			ArrName:  n.Name,
 			ElemSize: n.ElemAnn.Size,
 			ElemPtr:  n.ElemAnn.IsPtr,
+			ArrIndex: buildExpr(n.Index, ast.TypeSize{Size: 4}),
+			ArrVal:   buildExpr(n.Value, n.ElemAnn),
 		}, true
 
 	case *ast.RawMemNode:
@@ -282,64 +310,223 @@ func buildStmt(node ast.Node) (BFStmt, bool) {
 		return BFStmt{Kind: BFStmtContinue}, true
 
 	case *ast.CallNode:
-		// 式文としてのCall（戻り値を使わない場合）
+		// 式文としてのCall。ValueフィールドにBFExprCall格納。
 		return BFStmt{
-			Kind:        BFStmtCall,
-			CallName:    n.FuncName,
-			CallRetSize: n.ReturnAnn.Size,
-			CallRetPtr:  n.ReturnAnn.IsPtr,
+			Kind:  BFStmtCall,
+			Value: buildExpr(n, n.ReturnAnn),
 		}, true
 	}
 	return BFStmt{}, false
 }
 
 // buildCond はConditionNodeからBFCondを構築する。
-// ConditionNode.LeftAnn / RightAnn はAnalyzerが付与済み。
+// ConditionNode.Left/Right は string（変数名 or リテラル）。
+// Analyzerが付与したLeftAnn/RightAnnを使いIDENT/LIT_INTのBFExprに変換する。
 func buildCond(node ast.Node) BFCond {
 	cond, ok := node.(*ast.ConditionNode)
 	if !ok {
-		return BFCond{Op: "ne", Left: "expr", Right: "0"}
+		// ConditionNodeでない場合: 0との不等比較としてフォールバック
+		return BFCond{
+			Op:    "ne",
+			Left:  BFExpr{Kind: BFExprLitInt, ResultSize: 4, ResultPtr: false, IntVal: 0},
+			Right: BFExpr{Kind: BFExprLitInt, ResultSize: 4, ResultPtr: false, IntVal: 0},
+		}
 	}
 	return BFCond{
-		Op:        cond.Op,
-		Left:      cond.Left,
-		LeftSize:  cond.LeftAnn.Size,
-		LeftPtr:   cond.LeftAnn.IsPtr,
-		Right:     cond.Right,
-		RightSize: cond.RightAnn.Size,
-		RightPtr:  cond.RightAnn.IsPtr,
+		Op:    cond.Op,
+		Left:  buildCondOperand(cond.Left, cond.LeftAnn),
+		Right: buildCondOperand(cond.Right, cond.RightAnn),
 	}
 }
 
-// ===== 式の文字列表現（表示用のみ） =====
+// buildCondOperand はConditionNode.Left/Right（string）をBFExprに変換する。
+// Analyzerが付与したAnnを使い、IDENT or LIT_INTとして出力する。
+// 将来AST側がNodeを直接保持するようになった場合は buildExpr に委譲するだけでよい。
+func buildCondOperand(s string, ann ast.TypeSize) BFExpr {
+	if len(s) == 0 {
+		return BFExpr{Kind: BFExprLitInt, ResultSize: 4, ResultPtr: false, IntVal: 0}
+	}
+	// 数値リテラル判定
+	isNum := s[0] >= '0' && s[0] <= '9'
+	isNeg := s[0] == '-' && len(s) > 1
+	if isNum || isNeg {
+		var val int64
+		for _, c := range s {
+			if c == '-' {
+				continue
+			}
+			if c < '0' || c > '9' {
+				goto ident
+			}
+		}
+		// 整数リテラルとして変換
+		val = 0
+		neg := false
+		for i, c := range s {
+			if i == 0 && c == '-' {
+				neg = true
+				continue
+			}
+			val = val*10 + int64(c-'0')
+		}
+		if neg {
+			val = -val
+		}
+		return BFExpr{Kind: BFExprLitInt, ResultSize: ann.Size, ResultPtr: ann.IsPtr, IntVal: val}
+	}
+ident:
+	return BFExpr{Kind: BFExprIdent, ResultSize: ann.Size, ResultPtr: ann.IsPtr, IdentName: s}
+}
 
-func exprStr(node ast.Node) string {
+// buildExpr はASTノードからBFExprを構築する。
+// hintはAnn情報が直接取れない場合のフォールバック（呼び出し元が責任を持つ）。
+func buildExpr(node ast.Node, hint ast.TypeSize) BFExpr {
 	if node == nil {
-		return "(none)"
+		return BFExpr{Kind: BFExprLitInt, ResultSize: hint.Size, ResultPtr: hint.IsPtr, IntVal: 0}
 	}
 	switch n := node.(type) {
 	case *ast.LiteralNode:
-		switch n.Kind {
-		case "IDENT":
-			return n.Value
-		case "INT_LIT", "FLOAT_LIT", "BOOL_LIT":
-			return n.Value
-		case "STRING_LIT":
-			return "\"" + n.Value + "\""
-		}
-		return n.Value
+		return buildLiteralExpr(n)
+
 	case *ast.ExprNode:
-		return n.Op + "{" + n.Type + "(" + exprStr(n.Left) + "," + exprStr(n.Right) + ")}"
+		return BFExpr{
+			Kind:       BFExprBinop,
+			ResultSize: n.Ann.Size,
+			ResultPtr:  n.Ann.IsPtr,
+			BinOp:      n.Op,
+			Lhs:        ptrExpr(buildExpr(n.Left, n.Ann)),
+			Rhs:        ptrExpr(buildExpr(n.Right, n.Ann)),
+		}
+
 	case *ast.CallNode:
-		return "call{" + n.FuncName + "(...)}"
+		e := BFExpr{
+			Kind:       BFExprCall,
+			ResultSize: n.ReturnAnn.Size,
+			ResultPtr:  n.ReturnAnn.IsPtr,
+			FuncName:   n.FuncName,
+		}
+		for _, arg := range n.Args {
+			a := buildExpr(arg, ast.TypeSize{Size: 4})
+			e.Args = append(e.Args, ptrExpr(a))
+		}
+		return e
+
 	case *ast.CastNode:
-		return "cast{" + n.Type + "(" + exprStr(n.Value) + ")}"
+		return BFExpr{
+			Kind:       BFExprCast,
+			ResultSize: n.Ann.Size,
+			ResultPtr:  n.Ann.IsPtr,
+			Inner:      ptrExpr(buildExpr(n.Value, n.Ann)),
+		}
+
 	case *ast.IndexNode:
-		return "index{" + n.Name + "(...)}"
+		return BFExpr{
+			Kind:       BFExprArrLoad,
+			ResultSize: n.ElemAnn.Size,
+			ResultPtr:  n.ElemAnn.IsPtr,
+			ArrName:    n.Name,
+			ArrIndex:   ptrExpr(buildExpr(n.Index, ast.TypeSize{Size: 4})),
+		}
+
 	case *ast.AddressNode:
-		return "addr{" + n.Name + "}"
+		return BFExpr{
+			Kind:       BFExprAddr,
+			ResultSize: 8,
+			ResultPtr:  true,
+			RefName:    n.Name,
+		}
+
 	case *ast.DerefNode:
-		return "deref{" + n.Name + "}"
+		return BFExpr{
+			Kind:       BFExprDeref,
+			ResultSize: hint.Size,
+			ResultPtr:  false,
+			RefName:    n.Name,
+		}
 	}
-	return "(...)"
+	return BFExpr{Kind: BFExprLitInt, ResultSize: hint.Size, ResultPtr: hint.IsPtr, IntVal: 0}
+}
+
+func buildLiteralExpr(n *ast.LiteralNode) BFExpr {
+	switch n.Kind {
+	case "INT_LIT":
+		val := parseInt64(n.Value)
+		return BFExpr{Kind: BFExprLitInt, ResultSize: n.Ann.Size, ResultPtr: n.Ann.IsPtr, IntVal: val}
+	case "FLOAT_LIT":
+		val := parseFloat32(n.Value)
+		return BFExpr{Kind: BFExprLitFloat, ResultSize: 4, ResultPtr: false, FloatVal: val}
+	case "BOOL_LIT":
+		var val int64
+		if n.Value == "true" {
+			val = 1
+		}
+		return BFExpr{Kind: BFExprLitInt, ResultSize: 4, ResultPtr: false, IntVal: val}
+	case "STRING_LIT":
+		return BFExpr{Kind: BFExprLitStr, ResultSize: 8, ResultPtr: true, StrVal: n.Value}
+	case "IDENT":
+		return BFExpr{Kind: BFExprIdent, ResultSize: n.Ann.Size, ResultPtr: n.Ann.IsPtr, IdentName: n.Value}
+	}
+	return BFExpr{Kind: BFExprLitInt, ResultSize: 4, ResultPtr: false, IntVal: 0}
+}
+
+func parseInt64(s string) int64 {
+	if len(s) == 0 {
+		return 0
+	}
+	neg := false
+	start := 0
+	if s[0] == '-' {
+		neg = true
+		start = 1
+	}
+	var val int64
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			break
+		}
+		val = val*10 + int64(c-'0')
+	}
+	if neg {
+		val = -val
+	}
+	return val
+}
+
+func parseFloat32(s string) float32 {
+	// 簡易実装: strconvを使う
+	var f float64
+	neg := false
+	i := 0
+	if len(s) > 0 && s[0] == '-' {
+		neg = true
+		i = 1
+	}
+	intPart := float64(0)
+	for i < len(s) && s[i] != '.' {
+		intPart = intPart*10 + float64(s[i]-'0')
+		i++
+	}
+	fracPart := float64(0)
+	fracDiv := float64(1)
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) {
+			fracPart = fracPart*10 + float64(s[i]-'0')
+			fracDiv *= 10
+			i++
+		}
+	}
+	f = intPart + fracPart/fracDiv
+	if neg {
+		f = -f
+	}
+	return float32(f)
+}
+
+// ptrExpr はBFExprをヒープに確保してポインタを返す。
+func ptrExpr(e BFExpr) *BFExpr {
+	p := new(BFExpr)
+	*p = e
+	return p
 }
