@@ -1,5 +1,11 @@
 # Similarity
 
+# 重要なお知らせ:
+Similarityの開発拠点をGitHubからCodebergへ移行します。
+今後の開発・更新はCodebergを中心に行います。
+
+https://codeberg.org/Elestrovic
+
 **No,GC. No,guessing. No,C/C++.**
 
 *No garbage collector. No compiler guessing. No dependency on C/C++.*

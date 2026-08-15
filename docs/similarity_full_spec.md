@@ -8,31 +8,31 @@
 
 | 項目 | 内容 |
 |------|------|
-| 目的 | C/C++依存ゼロのシステムプログラミング言語 |
-| 拡張子 | `.iia` |
-| コンパイラ | Go製（動作中） |
-| バックエンド | CAI（開発中） / QBE（現在使用中） |
+| 目的 | C/C++依存ゼロのシステムプログラミング言語        |
+| 拡張子 | `.iia`                                   |
+| コンパイラ | Go製(動作中)                           |
+| バックエンド | CAI(開発中)                          |
 | 出力 | ネイティブバイナリ（C/C++トランスパイルではない） |
-| マルチOS | Cosmopolitan Libc（APE形式）予定 |
+| マルチOS | Cosmopolitan Libc（APE形式）予定         |
 
 ---
 
 ## アーキテクチャ
 
 ```
-人間が書くコード（高級版・シンタックスシュガー）
+      .sml（高級版・シンタックスシュガー）
          ↓
       .iia（テキストAST・低レイヤー）
          ↓
     typecheck（コンパイル時安全性チェック）
          ↓
-    CAI IR（開発中） / QBE IR（現在）
+    CAI IR（開発中）
          ↓
     ネイティブバイナリ
 ```
 
-- `.iia` はコンパイラが「推測しなくていい」完全明示的な中間表現
-- 高級版は `.iia` へ1対1で変換される糖衣構文
+- `.iia` はコンパイラが「推測しなくていい」完全明示的な低レイヤー
+- `.sml` は `.iia` へ1対1で変換される糖衣構文
 - CAIはQBEを完全に置き換えるオリジナルIR（C/C++依存ゼロ）
 
 ---
@@ -131,12 +131,12 @@ Array_bool(x)    // bool配列
 
 **比較演算子**
 ```iia
-equal(a:b)      // a == b
-notequal(a:b)   // a != b
-less(a:b)       // a < b
-lesseq(a:b)     // a <= b
-greater(a:b)    // a > b
-greatereq(a:b)  // a >= b
+equal(a,b)      // a == b
+notequal(a,b)   // a != b
+less(a,b)       // a < b
+lesseq(a,b)     // a <= b
+greater(a,b)    // a > b
+greatereq(a,b)  // a >= b
 ```
 
 ---
@@ -147,24 +147,24 @@ greatereq(a:b)  // a >= b
 ```iia
 If[
   check{less(hp:0)},
-  True[処理],
-  False[処理]
+  True{処理},
+  False{処理}
 ]
 ```
 
 **ループ（回数指定）**
 ```iia
 Loop[
-  Count{int(i:10)},
-  Body[処理]
+  count{int(i:10)},
+  for{処理}
 ]
 ```
 
 **ループ（条件付き）**
 ```iia
 Loop[
-  for{int(i:0), less(i:10), step{1}},
-  Body[処理]
+  check{int(i:0), less(i:10), step{1}},
+  for{処理}
 ]
 ```
 
@@ -369,9 +369,9 @@ ret <value>          // return
 | typecheck | ✅ 実装済み |
 | share() | ✅ 実装済み |
 | Echo（.eho） | ✅ 実装済み |
-| CAI IR | 🔶 設計確定、実装未着手 |
-| Cell（.cel） | 🔶 設計中 |
-| 高級版構文 | 🔶 設計中 |
+| CAI | 🔶 設計確定、実装中 |
+| Cell（.cel） | ✅ 実装済み |
+| 高級版構文 | ✅ 実装済み |
 | 借用チェッカー代替 | ✅ share()で部分実装 |
 | GPU | 🔶 CPUフォールバック中 |
 | 自己ホスト | 📅 長期目標 |
