@@ -1,520 +1,59 @@
 # Similarity
 
-# 重要なお知らせ:
-Similarityの開発拠点をGitHubからCodebergへ移行します。
-今後の開発・更新はCodebergを中心に行います。
+**Similarity** は、安全性・速度・シンプルさを同時に高い水準へ近づけることを目標とする、研究段階のシステムプログラミング言語です。
 
-https://codeberg.org/Elestrovic
+> **文書更新（2026-10-24）:** 言語の新しい設計方針と、GitHubにある従来の試作実装は、まだ一致していません。このREADMEや新しい設計資料のコード例は、現行コンパイラが受理することを意味しません。
 
-**No,GC. No,guessing. No,C/C++.**
+## プロジェクトの方向性
 
-*No garbage collector. No compiler guessing. No dependency on C/C++.*
+- **No GC:** ガベージコレクタに依存しないメモリ管理を追求する。最終的な安全性・寿命管理の規則は研究中。
+- **No Guessing:** コンパイラに曖昧な意味を勝手に選ばせない。ただし宣言・確定した言語規則からの**決定的な型推論は許す**。
+- **C/C++からの独立:** 言語と標準ライブラリをC/C++の言語機能に依存させず、最終的には独立したネイティブコード生成を目指す。開発用のブートストラップ実装やOSのABIを利用することとは区別する。
+- 既存の方式を無条件に最適解とせず、性能、安全性、分かりやすさを検証する。
 
-Similarityは、メモリ管理・型・危険な操作・並行処理などを可能な限り明示的に扱うことを目指して設計されたシステムプログラミング言語です。
+## 開発拠点
 
-作者: 奇曲 宮夢 (Kikyoku Miyu)
-バージョン: v0.1.0 (Prototype)
+主要な開発拠点をCodebergへ移行する方針です。
 
----
+- [Elestrovic on Codeberg](https://codeberg.org/Elestrovic)
+- [GitHub: Elestrovic/Similarity](https://github.com/Elestrovic/Similarity) — 既存のGo/C試作実装、AIと協力して進める実験、設計記録。
 
-## Similarityとは
+このGitHubリポジトリには**以前の言語構文を扱う試作コンパイラ**が存在します。新たに議論した `Func`、`func_argument`、`until`、`here`、`asfor` 等は、リポジトリに実装されているという意味ではありません。
 
-Similarityは、システムプログラミングにおける「暗黙的な動作」を減らし、プログラマがプログラムの動作を明確に記述できることを重視しています。
-
-設計思想は次の3点に集約されます。
-
-* **No garbage collector.** — GCによるメモリ管理を前提としない
-* **No compiler guessing.** — コンパイラによる過度な推測に依存しない
-* **No dependency on C/C++.** — C/C++やGCC・LLVMを実行基盤として必要としない
-
-これらは単なるキャッチコピーではなく、Similarityの設計方針を表すものです。
-
----
-
-# コンパイラ
-
-Similarityのコンパイラは、ソースコードを解析し、CAIによって最終的なx86-64 ELFバイナリまで変換します。
+## 既存試作の概要（ソースコードから確認した内容）
 
 ```text
-.iia
- ↓
-Lexer
- ↓
-Parser
- ↓
-TypeChecker
- ↓
-Analyzer
- ↓
-BackendFunction ←CAI側のBackendFunctionに送る
- ↓
-CAI
- ├─ BackendFunction ←Go側のBackendFunctionを受け取る
- ├─ CFG
- ├─ Instruction Selection
- ├─ Virtual Registers
- ├─ Register Allocation
- ├─ x86-64
- └─ ELF
+.iia / .sml
+  └─ 既存の Go フロントエンド
+       Lexer → Parser → AST → TypeCheck → Analyzer
+                                         ↓
+                                  BackendFunction
+                                         ↓
+                                 バイナリ・シリアライズ
+                                         ↓
+                               Cバックエンド → CFG
+                                         ↓
+                              機械語生成は今後の課題
 ```
 
-## CAI
-
-**CAI（Common Assembly Instructions）は、Similarityのバックエンド全体を指します。**
-
-CAIは単独の中間表現ではありません。
-
-Similarityの`BackendFunction`から始まり、
-
-```text
-BackendFunction
-    ↓
-CFG
-    ↓
-Instruction Selection
-    ↓
-Virtual Registers
-    ↓
-Register Allocation
-    ↓
-x86-64
-    ↓
-ELF
-```
-
-までのバックエンド処理全体がCAIです。
-
-そのため、SimilarityはCAIのために別の中間表現を挟む設計を採用していません。
-
-CAIは、Similarityのフロントエンドとx86-64コード生成を接続するバックエンドとして設計されています。
-
-※また、CAIは現在C言語で書かれていますが、将来的にはC依存の無いもので書きます。
-
----
-
-# BackendFunction
-
-`BackendFunction`は、Analyzerによる解析結果をCAIへ渡すためのバックエンド用表現です。
-
-```text
-Analyzer
-   ↓
-BackendFunction
-   ↓
-CAI
-```
-
-BackendFunctionは、ソースコードのASTそのものではなく、バックエンドが必要とする情報を保持します。
-
-CAIはBackendFunctionを入力としてCFGを構築し、その後のコード生成処理を行います。
-
----
-
-# CFG
-
-CAIでは、BackendFunctionから制御フローグラフ（CFG）を構築します。
-
-```text
-BackendFunction
-      ↓
-     CFG
-```
-
-CFGでは、プログラムを基本ブロックへ分割し、
-
-* ブロック間の制御フロー
-* successor
-* predecessor
-* 条件分岐
-* ループ
-* ループ深度
-
-などを管理します。
-
-例えば、
-
-```text
-entry
-  ↓
-loop_header
- ├──→ loop_exit
- ↓
-loop_body
- └──→ loop_header
-```
-
-のような制御構造をCAI内部で表現します。
-
----
-
-# Instruction Selection
-
-CFG構築後、CAIは各BackendFunctionの処理をx86-64向けの命令へ変換していきます。
-
-```text
-CFG
- ↓
-Instruction Selection
-```
-
-この段階では、演算・比較・分岐・関数呼び出し・メモリアクセスなどを、ターゲットとなる命令列へ落とし込みます。
-
-Similarityでは、最終的な機械語生成までをCAI内部で管理することを目指しています。
-
----
-
-# Virtual Registers
-
-命令選択によって生成された値は、仮想レジスタとして管理されます。
-
-```text
-Instruction Selection
-        ↓
-Virtual Registers
-```
-
-仮想レジスタによって、命令選択段階と物理レジスタ割り当てを分離します。
-
----
-
-# Register Allocation
-
-仮想レジスタを実際のx86-64物理レジスタへ割り当てます。
-
-```text
-Virtual Registers
-       ↓
-Register Allocation
-```
-
-必要に応じてスタック領域への退避も行います。
-
-この処理では、CFGやライブ情報などを利用して、可能な限り適切なレジスタ割り当てを行います。
-
----
-
-# x86-64
-
-Register Allocation後、CAIはx86-64命令を生成します。
-
-```text
-Register Allocation
-        ↓
-      x86-64
-```
-
-アセンブラや外部コンパイラを介さず、Similarity自身のバックエンドから機械語を生成することを目標としています。
-
----
-
-# ELF
-
-生成したx86-64機械語をELF形式へ配置します。
-
-```text
-x86-64
-  ↓
-ELF
-```
-
-これにより、外部リンカに依存せず、CAIから直接実行可能なELFバイナリを生成します。
-
----
-
-# 言語仕様
-
-## 基本構文
-
-Similarityでは、基本的に以下の構造を採用します。
-
-```text
-カテゴリ[操作{引数}]
-```
-
-## 変数
-
-```iia
-Variable[let{int(x:10)}]
-Variable[unclet{float(PI:3.14)}]
-
-Mutation[variable{int(x:30)}]
-```
-
-## 演算子
-
-```iia
-+{int(a,b)}
--{int(a,b)}
-*{int(a,b)}
-/{int(a,b)}
-
-++{i}
---{i}
-```
-
-## 比較
-
-```iia
-equal(a:b)
-notequal(a:b)
-less(a:b)
-lesseq(a:b)
-greater(a:b)
-greatereq(a:b)
-```
-
-## 制御フロー
-
-```iia
-If[check{less(hp:0)},
-  True{...},
-  False{...}
-]
-```
-
-```iia
-Loop[
-  check{less(i:10)},
-  for{
-    ...,
-    ++{i}
-  }
-]
-```
-
-```iia
-break{}
-continue{}
-```
-
-## 関数
-
-```iia
-Function[add{
-  receive{int(a), int(b)},
-  return(+{int(a,b)})
-}]
-
-Function_public[main{
-  receive{},
-  Variable[let{int(result:call{add(1,2)})}],
-  return(result)
-}]
-```
-
-## 配列
-
-```iia
-Variable[let{Array_int(arr:10)}]
-
-Mutation[array{int(arr:0:42)}]
-
-Variable[let{int(val:index{arr(0)})}]
-```
-
-## ポインタ
-
-危険なメモリアクセスは`Mem[risk{}]`によって明示します。
-
-```iia
-Variable[let{int(ptr:addr{x})}]
-
-Mem[risk{
-  Variable[let{int(val:deref{ptr})}]
-}]
-```
-
-## 非同期処理
-
-共有変数へのアクセスは`share()`によって明示します。
-
-```iia
-Async[{
-  share(x),
-  Mutation[variable{int(x:30)}]
-}]
-```
-
----
-
-# 安全性システム
-
-Similarityでは、危険な操作や型に関する問題をコンパイル時に検出します。
-
-エラーは、
-
-```text
-行:列: TypeCheck Error [コード]: メッセージ
-```
-
-の形式で報告されます。
-
-| コード           | 内容                          |
-| ------------- | --------------------------- |
-| TC1001        | null許容型のnullチェックなしアクセス      |
-| TC2001〜TC2010 | 型ミスマッチ・未宣言変数・配列型違反など        |
-| TC3002        | `risk{}`外での`deref`使用        |
-| TC4001        | 整数オーバーフロー                   |
-| TC5001        | `share`対象の未宣言変数             |
-| TC5002        | Async内で`share`宣言なしにMutation |
-
----
-
-# 標準ライブラリ
-
-| ライブラリ  | 主な機能                        |
-| ------ | --------------------------- |
-| `math` | `absolute_value`, `maximum` |
-| `io`   | `io_print`                  |
-
-詳細は`docs/StandardLibrary.md`を参照してください。
-
----
-
-# 実装状況
-
-| 機能                      | 状態      |
-| ----------------------- | ------- |
-| Lexer / Parser          | ✅ 実装済み  |
-| TypeChecker             | ✅ 実装済み  |
-| Analyzer                | ✅ 実装済み  |
-| BackendFunction         | ✅ 実装済み  |
-| CAI CFG                 | ✅ 実装済み  |
-| Instruction Selection   | 🚧 開発中  |
-| Virtual Registers       | 🚧 開発中  |
-| Register Allocation     | 📅 予定   |
-| x86-64コード生成             | 📅 予定   |
-| ELF生成                   | 📅 予定   |
-| 配列                      | ✅ 実装済み  |
-| ポインタ / `deref` / `addr` | ✅ 実装済み  |
-| 構造体                     | ✅ 実装済み  |
-| Async / `share`         | ✅ 実装済み  |
-| Echo                    | ✅ 実装済み  |
-| Cell                    | ✅ 実装済み  |
-| 標準ライブラリ                 | ✅ 実装済み  |
-| APE形式                   | 📅 長期目標 |
-| 自己ホスト                   | 📅 長期目標 |
-| GPU本実装                  | 📅 長期目標 |
-
-※ 実装状況は開発の進行に合わせて更新されます。
-
----
-
-# 設計原則
-
-### 1. コンパイラは推測しない
-
-プログラムの重要な動作を暗黙的な推測に依存させず、可能な限り明示的に記述します。
-
-### 2. unsafe操作を明示する
-
-危険なメモリアクセスは`Mem[risk{}]`として明示します。
-
-### 3. 共有状態を明示する
-
-Async間で共有される変数は`share()`によって明示します。
-
-### 4. GCに依存しない
-
-メモリ管理をガベージコレクタに隠蔽せず、システムプログラミングに適した明示的なモデルを目指します。
-
-### 5. C/C++に依存しない
-
-SimilarityのバックエンドであるCAIは、C/C++やGCC、LLVMを実行基盤として必要としない独立したコード生成系を目指します。
-
-### 6. 中間表現を増やさない
-
-FrontendとBackendの間に不要な中間表現を追加せず、`BackendFunction → CAI`という直接的な構造を維持します。
-
----
-
-# 開発状況
-
-Similarityは現在プロトタイプ段階です。
-
-現在はフロントエンドからBackendFunction、そしてCAIのCFG構築までの基盤が整備されています。
-
-次の主要な段階は、
-
-```text
-CFG
- ↓
-Instruction Selection
- ↓
-Virtual Registers
- ↓
-Register Allocation
- ↓
-x86-64
- ↓
-ELF
-```
-
-です。
-
-Similarityは、最終的に外部コンパイラやリンカに依存せず、自身のバックエンドによって実行可能なバイナリを生成できるシステムプログラミング言語を目指します。
-
-# Similarity ― 今後の方針
-
-## フロントエンド
-
-Similarity本体の言語機能を強化するとともに、標準ライブラリおよび周辺ライブラリの種類・機能を拡充していきます。
-
----
-
-## バックエンド
-
-Similarityのネイティブ実行基盤を順次整備します。
-
-CFG、ABI、アセンブラ（`as`）、リンカ（`ld`）など、コンパイルからネイティブバイナリ生成までに必要となる基盤を実装し、**2027年4月までの主要機能実装を目標**とします。
-
----
-
-## 各言語との互換
-
-Similarity本体と各言語の互換機能は、**独立した互換パッチとして分離**する予定です。
-
-Similarity本体にすべての互換機能を内蔵するのではなく、必要な言語の互換パッチを個別に導入できる構成を目指します。
-
-これにより、既存のコード資産を活用しながら、段階的にSimilarityへ移行できる環境を提供します。
-
-### 予定している互換パッチ
-
-| パッチ名                       | 対応言語       |
-| -------------------------- | ---------- |
-| `C_compatibility`          | C          |
-| `C++_compatibility`        | C++        |
-| `Rust_compatibility`       | Rust       |
-| `Zig_compatibility`        | Zig        |
-| `Java_compatibility`       | Java       |
-| `JavaScript_compatibility` | JavaScript |
-| `TypeScript_compatibility` | TypeScript |
-| `Python_compatibility`     | Python     |
-| `C#_compatibility`         | C#         |
-| `Go_compatibility`         | Go         |
-| `Odin_compatibility`       | Odin       |
-| `COBOL_compatibility`      | COBOL      |
-
-※互換パッチの対応言語は、今後さらに追加される可能性があります。
-
----
-
-## Compatibility is a bridge.
-
-既存の言語やコード資産を捨てることを前提にはしません。
-
-既存資産との互換性を維持しながら、新規開発ではSimilarityを選択できる。
-
-そして、必要に応じて既存コードを段階的にSimilarityへ移行できる。
-
-**互換性は過去に縛られるためのものではなく、過去から未来へ移行するための橋です。**
-
-我々は、レガシー資産を否定したいわけでも、C/C++を否定したいわけでもございません。
-
-それらが長年にわたって築き上げてきた利便性や資産には、大きな価値があります。
-
-だからこそ我々は、それらを捨てるのではなく、受け継ぎ、接続し、その先へ進みたい。
-
-**利便性を持ったものに、強固な安全を築き上げる。**
-
-それが、Similarityの目指すものです。
+- `cmd/main.go` は `--cai` 経路でフロントエンドとCバックエンドを呼び出します。
+- `cbackend/main.c` はBackendFunctionを読み込み、CFGを構築します。現状は出力ファイルを作成するものの、実行可能なx86-64機械語を完成させる処理はまだありません。
+- リポジトリには旧テキストCAI生成経路（`caigen/`、`compiler/pipeline.go`）も残っています。新経路と混同しないでください。
+- これらは**ソースを読んで整理した状態**であり、この文書更新に際してビルド・テストの実行確認はしていません。
+
+## ドキュメント
+
+| 資料 | 内容 |
+| --- | --- |
+| [文書一覧](docs/README.md) | 何が設計案で、何が実装状態か |
+| [言語設計（現行の議論）](docs/language-design.md) | 文法・型推論・関数引数・`until`／`here`／`asfor` |
+| [コンパイラの実装状況](docs/compiler-status.md) | GitHub試作コードの現状と新設計との差 |
+| [セルフホスティング計画](docs/self-hosting.md) | Stage 0→1→2、最小機能、検証方針 |
+| [2026-10-19 設計会議記録](docs/meetings/2026-10-19.md) | 基本構文・関数・Explore等の議論 |
+| [2026-10-22 設計会議記録](docs/meetings/2026-10-22.md) | 型推論・複数引数・`until` の議論 |
+
+**読み方:** 文法案を実装済み機能と混同しないこと。仕様の未確定箇所を、旧資料や一般的な他言語の規則で勝手に埋めないこと。
+
+## ライセンス
+
+リポジトリのライセンスについては、必ずルートの [LICENSE](LICENSE) を参照してください。
