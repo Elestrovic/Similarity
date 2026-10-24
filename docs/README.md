@@ -11,6 +11,7 @@
 | [self-hosting.md](self-hosting.md) | セルフホスティング実現までの段階 |
 | [meetings/2026-10-19.md](meetings/2026-10-19.md) | 基本文法・関数・Explore等の設計履歴 |
 | [meetings/2026-10-22.md](meetings/2026-10-22.md) | 型推論・複数引数・範囲表現の設計履歴 |
+| [meetings/2026-10-24.md](meetings/2026-10-24.md) | 高水準寄りMIR・MIR Generator・Analyzer・独立Analysis・差分再コンパイルの設計 |
 
 ## 古い資料とコードの整理
 
