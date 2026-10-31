@@ -1,6 +1,6 @@
 # Similarity ドキュメント案内
 
-更新: **2026-10-26**
+更新: **2026-10-31**
 
 このフォルダには、**今の設計方針**と**過去の議論**、そして**これから作るコンパイラの計画**を収録しています。
 
@@ -9,10 +9,13 @@
 | [language-design.md](language-design.md) | 現在の設計。型推論、関数引数、until、here、asforなど |
 | [compiler-status.md](compiler-status.md) | 旧ソース削除後の実装状況 |
 | [self-hosting.md](self-hosting.md) | セルフホスティング実現までの段階 |
+| **[memory-management.md](memory-management.md)** | **最新のメモリ管理研究案（2026-10-31）**：直接アドレス参照、可変長断片の論理統合、Free Ranges、HWM、寿命・安全性の未解決課題 |
 | [meetings/2026-10-19.md](meetings/2026-10-19.md) | 基本文法・関数・Explore等の設計履歴 |
 | [meetings/2026-10-22.md](meetings/2026-10-22.md) | 型推論・複数引数・範囲表現の設計履歴 |
 | [meetings/2026-10-24.md](meetings/2026-10-24.md) | 高水準寄りMIR・MIR Generator・Analyzer・独立Analysis・差分再コンパイルの設計 |
-| [meetings/2026-10-26.md](meetings/2026-10-26.md) | メモリ管理研究：固有ID・親子ID・4bit区間ID・empty・中央管理表・円形配置と参照探索 |
+| [meetings/2026-10-26.md](meetings/2026-10-26.md) | **過去のメモリ管理案（履歴）**：固有ID・親子ID・4bit区間ID・empty・中央管理表・円形配置と参照探索 |
+
+**注:** 2026-10-26の全データ固有ID方式は当時の設計履歴です。2026-10-31時点では[新しいメモリ管理案](memory-management.md)を検討していますが、こちらも未確定・未実装です。
 
 ## 古い資料とコードの整理
 
